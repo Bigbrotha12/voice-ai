@@ -11,6 +11,8 @@ build/
 
 # Environment / secrets
 .env
+.env.*
+!.env.example
 
 # Generated audio and local artifacts
 output/

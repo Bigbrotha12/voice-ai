@@ -32,6 +32,7 @@ Cursor) can use them. A later phase adds telephony so agents can hold real phone
 - [ ] **Phase 2** — Wire upstream's built-in MCP into opencode; verify end-to-end
 - [ ] **Phase 3** — Wrapper MCP server (`services/voice-mcp`): `say`, `voices`, `listen`
 - [ ] **Phase 4** — Telephony spike: Pipecat bot + LiveKit SIP + Telnyx trunk
+- [ ] **Phase 5** — Conversation dynamics: semantic end-of-turn, barge-in tuning, pre-rendered backchannels, speculative reply pipelining
 
 See `docs/setup.md` for bring-up instructions and `telephony/RESEARCH.md`
 for the Phase 4 decision record.

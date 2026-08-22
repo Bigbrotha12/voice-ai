@@ -4,4 +4,8 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/../services/voice-mcp"
-exec npx @modelcontextprotocol/inspector uv run voice-mcp
+env_args=()
+if [ -f ../../.env ]; then
+  env_args=(--env-file ../../.env)
+fi
+exec npx @modelcontextprotocol/inspector uv run "${env_args[@]}" voice-mcp

@@ -16,7 +16,14 @@ class Settings:
     client_id: str
     default_profile: str | None
     say_timeout_seconds: float
-    poll_interval_seconds: float
+
+
+def _float_env(name: str, default: str) -> float:
+    raw = os.environ.get(name, default)
+    try:
+        return float(raw)
+    except ValueError:
+        raise ValueError(f"{name} must be a number, got {raw!r}") from None
 
 
 def load_settings() -> Settings:
@@ -24,6 +31,5 @@ def load_settings() -> Settings:
         base_url=os.environ.get("VOICEBOX_URL", DEFAULT_BASE_URL).rstrip("/"),
         client_id=os.environ.get("VOICEBOX_CLIENT_ID", "voice-mcp"),
         default_profile=os.environ.get("DEFAULT_PROFILE") or None,
-        say_timeout_seconds=float(os.environ.get("SAY_TIMEOUT_SECONDS", "120")),
-        poll_interval_seconds=float(os.environ.get("POLL_INTERVAL_SECONDS", "1.0")),
+        say_timeout_seconds=_float_env("SAY_TIMEOUT_SECONDS", "120"),
     )

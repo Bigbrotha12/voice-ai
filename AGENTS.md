@@ -12,10 +12,10 @@ or patch upstream; everything we own lives in this repo.
 
 | Layer | Where | Notes |
 |---|---|---|
-| Voicebox runtime | `~/Projects/ai/voicebox-upstream` (sibling dir) | Source build; owns TTS/STT/REST/MCP |
+| Voicebox runtime | `~/Projects/ai/voicebox-upstream` (sibling dir) | Source build, pinned tag v0.5.0; owns TTS/STT/REST/MCP |
 | Wrapper MCP | `services/voice-mcp/` | FastMCP server exposing `say`, `voices`, `listen` |
 | Clients | opencode / Claude Code configs | Registered per docs/setup.md |
-| Telephony (future) | `telephony/` | Pipecat + LiveKit SIP + Telnyx trunk |
+| Telephony (future) | `telephony/` | Pipecat + LiveKit SIP + Telnyx trunk; turn-taking plan in `telephony/RESEARCH.md` |
 
 ## Facts that will bite you
 
@@ -25,11 +25,16 @@ or patch upstream; everything we own lives in this repo.
   Never expose these ports beyond loopback.
 - **Backend lifetime.** The API only answers while the Voicebox desktop app (or
   container) is running. "Connection refused" almost always means it isn't up.
-- **Response shape assumptions are unverified** until Phase 1 runs:
-  generation id may be `generation_id` or `id`; status values are matched loosely
-  (`completed`/`failed` families). Verify against the live server before tightening.
+- **API shapes (verified against v0.5.0 source).** `/generate` requires
+  `profile_id`; responses use `id` (client accepts `generation_id` as fallback).
+  `GET /generate/<id>/status` is SSE, not JSON - consume the stream
+  (`VoiceboxClient.watch_status`), never `resp.json()` it. `/transcribe`
+  multipart field is `file` and answers HTTP 202 while Whisper downloads.
+  Statuses: `generating`, `loading_model`, `completed`, `failed` (+ `not_found`
+  pseudo-status on the stream).
 - **Engine names** for `engine=` args: `qwen`, `qwen_custom_voice`, `luxtts`,
-  `chatterbox`, `chatterbox_turbo`, `tada`, `kokoro`.
+  `chatterbox`, `chatterbox_turbo`, `tada`, `kokoro`. Keep this as a soft list -
+  the wrapper accepts any string so new upstream engines don't get rejected.
 
 ## Commands
 
@@ -42,8 +47,9 @@ uv sync --directory services/voice-mcp
 uv run --env-file .env --directory services/voice-mcp voice-mcp   # stdio MCP
 
 # Verification
-./scripts/smoke-test.sh         # REST path: profiles -> generate -> poll
+./scripts/smoke-test.sh         # REST path: profiles -> speak -> SSE status
 ./scripts/mcp-inspect.sh        # MCP inspector against the wrapper
+uv run --directory services/voice-mcp pytest -q   # unit tests
 ```
 
 ## Conventions
