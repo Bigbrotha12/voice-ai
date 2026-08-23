@@ -62,7 +62,7 @@ Claude Code:
 
 ```sh
 claude mcp add voicebox --transport http \
-  --url http://127.0.0.1:17600/mcp \
+  --url http://127.0.0.1:17600/mcp/ \
   --header "X-Voicebox-Client-Id: claude-code"
 ```
 
@@ -83,9 +83,11 @@ opencode (project-level `opencode.json`):
 Then ask the agent to call `voicebox.list_profiles`, then `voicebox.speak`.
 Per-client voice bindings show up under Voicebox -> Settings -> MCP.
 
-Note: once our wrapper is also registered, agents see both `voicebox.speak`
-and our `say` - disable the upstream server when testing ours to avoid
-confusing double-voice behavior.
+Both servers stay enabled in `opencode.json` on purpose: `voicebox.*` is the
+upstream raw tool surface, while our wrapper's `say`/`listen`/`voices` add
+host playback and mic capture on top. If you ever test wrapper changes in
+isolation, temporarily disable the upstream entry so tool calls are
+unambiguous.
 
 ## 3. Wrapper MCP server (ours)
 
@@ -106,7 +108,7 @@ Inspect tools without an agent host:
 REST-level check independent of MCP:
 
 ```sh
-./scripts/smoke-test.sh         # profiles -> generate -> poll -> PASS/FAIL
+./scripts/smoke-test.sh         # profiles -> speak -> SSE status -> PASS/FAIL
 ```
 
 ## Environment variables

@@ -1,15 +1,16 @@
 """Wrapper MCP server exposing high-level voice tools over a local Voicebox.
 
 Tools:
-- say(text, ...)      Speak through Voicebox (plays on speakers) and wait for
-                      the generation to finish before returning.
-- listen(seconds)     STT from the microphone (not implemented yet; will fail
-                      until mic capture lands).
+- say(text, ...)      Generate speech via Voicebox, wait for completion (SSE),
+                      then play the wav host-side.
+- listen(seconds)     Record from the microphone, transcribe via Voicebox
+                      Whisper, return the text.
 - voices()            List available voice profiles.
 """
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,7 @@ from .playback import play_file
 from .voicebox_client import (
     VoiceboxClient,
     VoiceboxError,
+    classify,
     extract_generation_id,
 )
 
@@ -99,9 +101,9 @@ async def say(
             f"Spoke but could not confirm completion ({gen_id}): {exc}"
         ) from exc
 
-    if result["status"] == "completed":
+    if classify(str(result["status"])) == "done":
         wav_path = _settings.output_dir / f"{gen_id}.wav"
-        played, detail = play_file(_settings, str(wav_path))
+        played, detail = await asyncio.to_thread(play_file, _settings, str(wav_path))
         result["audio_path"] = str(wav_path)
         result["played"] = played
         result["play_detail"] = detail
@@ -120,10 +122,13 @@ async def listen(seconds: float = 5.0) -> str:
         seconds: How long to record, capped at 60.
     """
     client = _get_client()
-    audio_path = record(min(max(seconds, 1.0), 60.0))
+    try:
+        audio_path = await asyncio.to_thread(record, min(max(seconds, 1.0), 60.0))
+    except MicError as exc:
+        raise RuntimeError(str(exc)) from exc
     try:
         payload = await client.transcribe(audio_path)
-    except (VoiceboxError,) as exc:
+    except VoiceboxError as exc:
         raise RuntimeError(str(exc)) from exc
     finally:
         Path(audio_path).unlink(missing_ok=True)

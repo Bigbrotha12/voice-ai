@@ -41,8 +41,10 @@ for the Phase 4 decision record.
 
 ```
 .
+├── opencode.json         # registers upstream MCP + our wrapper for opencode
 ├── services/voice-mcp/   # Wrapper MCP server (FastMCP, Python)
-├── scripts/              # smoke-test.sh, mcp-inspect.sh
+├── docker/               # scoped podman registries config + compose port override
+├── scripts/              # upstream-up.sh, smoke-test.sh, mcp-inspect.sh, play-latest.sh
 ├── docs/                 # setup and operations notes
 ├── telephony/            # Phase 4 research and future code
 └── AGENTS.md             # conventions for agent sessions in this repo

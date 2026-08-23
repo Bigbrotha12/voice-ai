@@ -34,17 +34,23 @@ def _resolve_device() -> str | None:
     if dev:
         return dev
     pactl = shutil.which("pactl")
-    if pactl:
-        try:
-            result = subprocess.run(
-                [pactl, "get-default-source"],
-                capture_output=True, text=True, timeout=5,
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                return result.stdout.strip()
-        except subprocess.SubprocessError:
-            pass
-    return None
+    if pactl is None:
+        raise MicError(
+            "pactl not found - cannot detect the default input source; "
+            "set VOICEBOX_MIC_DEVICE explicitly"
+        )
+    try:
+        result = subprocess.run(
+            [pactl, "get-default-source"],
+            capture_output=True, text=True, timeout=5,
+        )
+    except subprocess.SubprocessError as exc:
+        raise MicError(f"failed to detect default input source via pactl: {exc}") from exc
+    if result.returncode != 0 or not result.stdout.strip():
+        raise MicError(
+            "no default input source reported by pactl - is a microphone connected?"
+        )
+    return result.stdout.strip()
 
 
 def record(seconds: float) -> str:
@@ -57,11 +63,6 @@ def record(seconds: float) -> str:
     try:
         if ffmpeg:
             device = _resolve_device()
-            if device is None:
-                raise MicError(
-                    "no input source found - is a microphone connected? "
-                    "(VOICEBOX_MIC_DEVICE can name one explicitly)"
-                )
             cmd = [
                 ffmpeg, "-loglevel", "error", "-y",
                 "-f", "pulse", "-i", device,

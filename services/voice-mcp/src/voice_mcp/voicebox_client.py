@@ -1,6 +1,6 @@
 """Typed async client for the Voicebox REST API.
 
-Verified against upstream backend/routes on main (2026-08):
+Verified against upstream backend/routes on v0.5.0:
 - POST /generate            -> GenerationResponse {id, status, ...}; profile_id REQUIRED (404 without it)
 - POST /speak               -> GenerationResponse; profile resolves name-or-id, then bindings, then global default
 - GET  /generate/<id>/status -> SSE stream (text/event-stream): yields `data: {...}` immediately, then ~1/s
@@ -13,6 +13,7 @@ Verified against upstream backend/routes on main (2026-08):
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -49,33 +50,32 @@ def classify(status_value: str) -> str:
 
 
 class VoiceboxClient:
-    def __init__(self, settings: Any) -> None:
+    def __init__(self, settings: Any, transport: httpx.AsyncBaseTransport | None = None) -> None:
         self._settings = settings
         self._http = httpx.AsyncClient(
             base_url=settings.base_url,
             headers={"X-Voicebox-Client-Id": settings.client_id},
-            # SSE status events fire ~1/s, so a 30s read timeout is safe here.
+            # SSE status events fire ~1/s, so a 30s read timeout is safe here;
+            # transcribe() overrides with a longer timeout for slow Whisper runs.
             timeout=httpx.Timeout(30.0),
+            transport=transport,
         )
-
-    async def aclose(self) -> None:
-        await self._http.aclose()
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
         try:
             resp = await self._http.request(method, path, **kwargs)
         except httpx.HTTPError as exc:
             raise VoiceboxError(
-                f"Cannot reach Voicebox at {self._settings.base_url} "
-                f"(is the app running?): {exc!r}"
+                f"Request to Voicebox failed: {method} {path} -> {exc!r}"
             ) from exc
-        if resp.status_code == 202:
-            raise ModelDownloading(
-                f"Whisper model is downloading; try again in a minute: {resp.text[:300]}"
-            )
         if resp.status_code >= 400:
             raise VoiceboxError(f"{method} {path} -> HTTP {resp.status_code}: {resp.text[:500]}")
-        return resp.json()
+        try:
+            return resp.json()
+        except json.JSONDecodeError as exc:
+            raise VoiceboxError(
+                f"{method} {path} -> non-JSON 2xx response: {resp.text[:200]!r}"
+            ) from exc
 
     async def list_profiles(self) -> list[dict[str, Any]]:
         data = await self._request("GET", "/profiles")
@@ -121,49 +121,56 @@ class VoiceboxClient:
 
         The stream closes itself after completed/failed. `not_found` is a
         pseudo-status meaning the generation id is unknown -> immediate failure.
+        Raises VoiceboxError if the stream closes early without terminal status,
+        or TimeoutError if the whole watch exceeds timeout_seconds.
         """
         try:
-            async with self._http.stream(
-                "GET", f"/generate/{generation_id}/status", timeout=timeout_seconds
-            ) as resp:
-                if resp.status_code >= 400:
-                    raise VoiceboxError(
-                        f"GET /generate/{generation_id}/status -> HTTP {resp.status_code}"
-                    )
-                last: dict[str, Any] | None = None
-                async for line in resp.aiter_lines():
-                    if not line.startswith("data:"):
-                        continue
-                    try:
-                        event = json.loads(line[len("data:"):].strip())
-                    except json.JSONDecodeError:
-                        continue
-                    last = event
-                    state = classify(str(event.get("status", "")))
-                    if state == "done":
-                        return event
-                    if state == "failed":
+            async with asyncio.timeout(timeout_seconds):
+                async with self._http.stream(
+                    "GET", f"/generate/{generation_id}/status"
+                ) as resp:
+                    if resp.status_code >= 400:
                         raise VoiceboxError(
-                            f"Generation {generation_id} failed: "
-                            f"{event.get('error') or event}"
+                            f"GET /generate/{generation_id}/status -> HTTP {resp.status_code}"
                         )
-                    if state == "not_found":
-                        raise VoiceboxError(f"Generation {generation_id} not found on server")
-                if last is None:
+                    last: dict[str, Any] | None = None
+                    async for line in resp.aiter_lines():
+                        if not line.startswith("data:"):
+                            continue
+                        try:
+                            event = json.loads(line[len("data:"):].strip())
+                        except json.JSONDecodeError:
+                            continue
+                        last = event
+                        state = classify(str(event.get("status", "")))
+                        if state == "done":
+                            return event
+                        if state == "failed":
+                            raise VoiceboxError(
+                                f"Generation {generation_id} failed: "
+                                f"{event.get('error') or event}"
+                            )
+                        if state == "not_found":
+                            raise VoiceboxError(f"Generation {generation_id} not found on server")
+                    if last is None:
+                        raise VoiceboxError(
+                            f"Status stream for {generation_id} closed with no events"
+                        )
                     raise VoiceboxError(
-                        f"Status stream for {generation_id} closed with no events"
+                        f"Status stream for {generation_id} closed before terminal "
+                        f"state; last event: {last}"
                     )
-                return last
         except httpx.HTTPError as exc:
             raise VoiceboxError(
-                f"Cannot reach Voicebox at {self._settings.base_url}: {exc!r}"
+                f"Request to Voicebox failed (SSE status): {exc!r}"
             ) from exc
 
     async def transcribe(self, audio_path: str, model: str = "turbo") -> dict[str, Any]:
         with open(audio_path, "rb") as fh:
             try:
                 resp = await self._http.post(
-                    "/transcribe", files={"file": fh}, data={"model": model}
+                    "/transcribe", files={"file": fh}, data={"model": model},
+                    timeout=httpx.Timeout(120.0),
                 )
             except httpx.HTTPError as exc:
                 raise VoiceboxError(f"Transcribe request failed: {exc!r}") from exc
@@ -173,4 +180,9 @@ class VoiceboxClient:
             )
         if resp.status_code >= 400:
             raise VoiceboxError(f"POST /transcribe -> HTTP {resp.status_code}: {resp.text[:500]}")
-        return resp.json()
+        try:
+            return resp.json()
+        except json.JSONDecodeError as exc:
+            raise VoiceboxError(
+                f"POST /transcribe -> non-JSON 2xx response: {resp.text[:200]!r}"
+            ) from exc

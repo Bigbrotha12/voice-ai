@@ -42,7 +42,9 @@ def resolve_player(player_setting: str, has_binary) -> str | None:
     if player_setting == "none":
         return None
     if player_setting != "auto":
-        return player_setting if has_binary(player_setting) else None
+        if player_setting in PLAYER_COMMANDS and has_binary(player_setting):
+            return player_setting
+        return None
     for name in PLAYER_COMMANDS:
         if has_binary(name):
             return name
@@ -68,8 +70,8 @@ def _run(cmd: list[str]) -> tuple[bool, str]:
 def _warmup_clip() -> Path | None:
     """A short silence wav, generated once per process, to wake the sink."""
     global _warmup_path
-    if _warmup_path is not None:
-        return _warmup_path if _warmup_path.exists() else None
+    if _warmup_path is not None and _warmup_path.exists():
+        return _warmup_path
     ffmpeg = shutil.which("ffmpeg")
     if ffmpeg is None:
         return None
