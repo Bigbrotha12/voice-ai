@@ -9,6 +9,13 @@ services:
     # Rootless-podman bind-mount fix: run as mapped root so the process can
     # write ./output (owned by your host user). Container root == your own
     # unprivileged account here - no real privilege escalation.
+    #
+    # Why nothing else works (verified 2026-08-23): any literal uid (e.g.
+    # the image's voicebox=999) maps to an unprivileged subordinate uid
+    # under rootless userns and gets EACCES on both host bind mounts AND
+    # the image-initialized named volumes. The only real alternative is
+    # --userns=keep-id with machine-specific uid pinning - not worth the
+    # fragility on a loopback-only stack. Keep this line.
     user: "0:0"
     environment:
       # Running as root makes ~/.cache resolve to /root/.cache, which is the
