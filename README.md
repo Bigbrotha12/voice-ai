@@ -12,8 +12,8 @@ Cursor) can use them. A later phase adds telephony so agents can hold real phone
 ```
 ┌─────────────────────────────────────────────────────┐
 │ Layer 1 — Voicebox runtime (upstream, unmodified)   │
-│   TTS engines (7) · Whisper STT · REST API :17493   │
-│   Built-in MCP (/mcp) — we consume, don't replace   │
+│   TTS engines (7) · Whisper STT · REST/MCP :17600   │
+│   Headless podman container (built-in MCP at /mcp)  │
 ├─────────────────────────────────────────────────────┤
 │ Layer 2 — Our wrapper MCP server (learning core)    │
 │   services/voice-mcp: say() · listen() · voices()   │

@@ -12,15 +12,20 @@ or patch upstream; everything we own lives in this repo.
 
 | Layer | Where | Notes |
 |---|---|---|
-| Voicebox runtime | `~/Projects/ai/voicebox-upstream` (sibling dir) | Source build, pinned tag v0.5.0; owns TTS/STT/REST/MCP |
+| Voicebox runtime | `~/Projects/ai/voicebox-upstream` (sibling dir) | Podman container, pinned tag v0.5.0; owns TTS/STT/REST/MCP |
 | Wrapper MCP | `services/voice-mcp/` | FastMCP server exposing `say`, `voices`, `listen` |
 | Clients | opencode / Claude Code configs | Registered per docs/setup.md |
 | Telephony (future) | `telephony/` | Pipecat + LiveKit SIP + Telnyx trunk; turn-taking plan in `telephony/RESEARCH.md` |
 
 ## Facts that will bite you
 
-- **Ports.** Native/source Voicebox listens on `17493`. Docker compose maps host
-  `17600 -> 17493`. Configs and scripts must agree on which one is live.
+- **Ports.** The podman runtime maps host `17600 -> 17493`; that is the live
+  path and the default in configs/scripts. Native `17493` only applies when
+  running a source/desktop build.
+- **Headless tradeoffs.** No speaking pill, no dictation, no direct speaker
+  playback. Generated audio lands in `voicebox-upstream/output/` (bind mount);
+  play host-side with `scripts/play-latest.sh`. Per-client voice bindings are
+  desktop-UI-only, so `DEFAULT_PROFILE` in `.env` carries voice selection.
 - **No auth, localhost only.** The REST API and MCP endpoint have no bearer token.
   Never expose these ports beyond loopback.
 - **Backend lifetime.** The API only answers while the Voicebox desktop app (or
@@ -40,7 +45,8 @@ or patch upstream; everything we own lives in this repo.
 
 ```sh
 # Upstream runtime (from ~/Projects/ai/voicebox-upstream)
-just setup && just dev          # first bring-up; CUDA notes in docs/setup.md
+podman-compose up -d --build    # first build takes several minutes
+podman-compose logs -f          # watch startup; /health when ready
 
 # Wrapper MCP server
 uv sync --directory services/voice-mcp
@@ -49,6 +55,7 @@ uv run --env-file .env --directory services/voice-mcp voice-mcp   # stdio MCP
 # Verification
 ./scripts/smoke-test.sh         # REST path: profiles -> speak -> SSE status
 ./scripts/mcp-inspect.sh        # MCP inspector against the wrapper
+./scripts/play-latest.sh        # play newest generated wav host-side
 uv run --directory services/voice-mcp pytest -q   # unit tests
 ```
 

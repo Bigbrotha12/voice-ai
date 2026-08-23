@@ -2,38 +2,52 @@
 
 Bringing the stack up in order. Phase 1 is the only heavyweight step.
 
-## 1. Voicebox runtime (upstream, source build)
+## 1. Voicebox runtime (upstream, podman container)
 
-Linux has no prebuilt binaries, so we build from source. NVIDIA GPU => CUDA
-PyTorch backend comes with the source build (the default Docker image is CPU-only).
-
-Prerequisites: git, Rust (`rustup`), Bun, just (`cargo install just`),
-Tauri Linux system deps (<https://v2.tauri.app/start/prerequisites/>).
+Primary path: headless container from a pinned upstream checkout. No host
+toolchain needed beyond podman (+ podman-compose). GPU comes later via a
+CUDA overlay we own; start CPU-only - kokoro/luxtts engines are CPU-fast.
 
 ```sh
 git clone https://github.com/jamiepine/voicebox.git ~/Projects/ai/voicebox-upstream
 cd ~/Projects/ai/voicebox-upstream
 git checkout v0.5.0        # pinned upstream version; bump deliberately, record in AGENTS.md
-just setup   # python venv + all deps; first run downloads model deps too
-just dev     # starts backend (:17493) + desktop app
+
+podman-compose up -d --build   # first build takes several minutes
 ```
 
 Verify:
 
 ```sh
-curl http://127.0.0.1:17493/profiles
+curl http://127.0.0.1:17600/health
+curl http://127.0.0.1:17600/profiles
 ```
 
-Then **create or import a voice profile in the app** (Profiles -> New -> drop
-a reference sample) - the smoke test and `/speak` need at least one profile.
+Then **create or import a voice profile via the web UI** at
+<http://127.0.0.1:17600> (Profiles -> New -> drop a reference sample) -
+the smoke test and `/speak` need at least one profile.
 
-Notes:
-- The REST API/MCP endpoint only answer while the desktop app is running.
-- Docker alternative: `docker compose up` in the upstream checkout serves a
-  headless CPU build at host port **17600** - no speakers, no speaking pill,
-  so prefer the source build for our use case.
-- If generation fails with CUDA errors, see upstream
-  `docs/content/docs/overview/troubleshooting.mdx`.
+Container facts that matter:
+- Host port is **17600** (container-internal stays 17493); bound to loopback only.
+- Generated audio lands in `~/Projects/ai/voicebox-upstream/output/` (bind
+  mount). Play host-side: `./scripts/play-latest.sh`.
+- Headless = no speaking pill, no dictation hotkey. Accepted tradeoff.
+- Models download lazily on first use into named volumes (persist across
+  restarts); `/transcribe` answers HTTP 202 while Whisper downloads.
+
+### GPU overlay (follow-up, not yet built)
+
+The stock image installs CPU-only PyTorch. When needed, add `docker/Dockerfile.cuda`
+(replicating upstream's pip stage with `--extra-index-url .../cu126`) plus a
+compose override passing CDI device `nvidia.com/gpu=all` - nvidia-container-toolkit
+and `/etc/cdi/nvidia.yaml` already exist on this machine.
+
+### Alternative: source/desktop build
+
+Only if you want the desktop app features (speaking pill, dictation hotkey,
+per-client binding UI): install Rust + just + Tauri system deps, then
+`just setup && just dev`; API then lives on **17493** and `.env` must point there.
+See upstream linux-install docs. Not required for anything in this repo.
 
 ## 2. Baseline wiring (upstream's built-in MCP)
 
@@ -43,7 +57,7 @@ Claude Code:
 
 ```sh
 claude mcp add voicebox --transport http \
-  --url http://127.0.0.1:17493/mcp \
+  --url http://127.0.0.1:17600/mcp \
   --header "X-Voicebox-Client-Id: claude-code"
 ```
 
@@ -54,7 +68,7 @@ opencode (project-level `opencode.json`):
   "mcp": {
     "voicebox": {
       "type": "remote",
-      "url": "http://127.0.0.1:17493/mcp",
+      "url": "http://127.0.0.1:17600/mcp",
       "headers": { "X-Voicebox-Client-Id": "opencode" }
     }
   }
@@ -92,7 +106,7 @@ REST-level check independent of MCP:
 
 | Var | Default | Purpose |
 |---|---|---|
-| `VOICEBOX_URL` | `http://127.0.0.1:17493` | Backend base URL |
+| `VOICEBOX_URL` | `http://127.0.0.1:17600` | Backend base URL |
 | `VOICEBOX_CLIENT_ID` | `voice-mcp` | Client identity for per-client bindings |
 | `DEFAULT_PROFILE` | unset | Fallback voice when callers omit `profile` |
 | `SAY_TIMEOUT_SECONDS` | `120` | Max seconds to watch the SSE status stream |
