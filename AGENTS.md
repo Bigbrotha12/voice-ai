@@ -37,6 +37,10 @@ or patch upstream; everything we own lives in this repo.
   multipart field is `file` and answers HTTP 202 while Whisper downloads.
   Statuses: `generating`, `loading_model`, `completed`, `failed` (+ `not_found`
   pseudo-status on the stream).
+- **MCP route needs the trailing slash**: `/mcp/` works, bare `/mcp` returns
+  405 (Starlette mount path quirk in v0.5.0).
+- **`GET /history/<id>`** is a plain-JSON status alternative to SSE - handy for
+  one-shot checks.
 - **Engine names** for `engine=` args: `qwen`, `qwen_custom_voice`, `luxtts`,
   `chatterbox`, `chatterbox_turbo`, `tada`, `kokoro`. Keep this as a soft list -
   the wrapper accepts any string so new upstream engines don't get rejected.

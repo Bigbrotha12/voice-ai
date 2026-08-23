@@ -73,7 +73,7 @@ opencode (project-level `opencode.json`):
   "mcp": {
     "voicebox": {
       "type": "remote",
-      "url": "http://127.0.0.1:17600/mcp",
+      "url": "http://127.0.0.1:17600/mcp/",
       "headers": { "X-Voicebox-Client-Id": "opencode" }
     }
   }
