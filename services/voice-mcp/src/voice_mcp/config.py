@@ -7,7 +7,7 @@ env vars to be present (useful for tooling and tests).
 import os
 from dataclasses import dataclass
 
-DEFAULT_BASE_URL = "http://127.0.0.1:17493"
+DEFAULT_BASE_URL = "http://127.0.0.1:17600"
 
 
 @dataclass(frozen=True)

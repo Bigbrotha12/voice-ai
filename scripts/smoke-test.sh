@@ -8,7 +8,7 @@
 #   VOICEBOX_URL=http://127.0.0.1:17600 SMOKE_PROFILE="Morgan" ./scripts/smoke-test.sh
 set -euo pipefail
 
-BASE_URL="${VOICEBOX_URL:-http://127.0.0.1:17493}"
+BASE_URL="${VOICEBOX_URL:-http://127.0.0.1:17600}"
 TEXT="${SMOKE_TEXT:-Voicebox smoke test successful.}"
 PROFILE="${SMOKE_PROFILE:-}"
 TIMEOUT_SECONDS="${SMOKE_TIMEOUT:-180}"
