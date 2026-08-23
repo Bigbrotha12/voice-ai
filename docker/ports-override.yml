@@ -1,7 +1,12 @@
-# Replaces the ports list from upstream's docker-compose.yml (v0.5.0 still
-# binds host 17493). Keeps our repo-wide convention: containerized runtime
-# lives at host 17600, loopback only. Loaded by scripts/upstream-up.sh.
+# Overrides for upstream's docker-compose.yml (v0.5.0). Loaded by
+# scripts/upstream-up.sh via -f; the !override tag REPLACES lists.
 services:
   voicebox:
     ports: !override
+      # Repo-wide convention: containerized runtime lives at host 17600,
+      # loopback only. v0.5.0 compose predates upstream's own remap.
       - "127.0.0.1:17600:17493"
+    # Rootless-podman bind-mount fix: run as mapped root so the process can
+    # write ./output (owned by your host user). Container root == your own
+    # unprivileged account here - no real privilege escalation.
+    user: "0:0"
