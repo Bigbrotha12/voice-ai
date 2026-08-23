@@ -17,6 +17,7 @@ from collections.abc import AsyncGenerator
 import httpx
 from loguru import logger
 from pipecat.frames.frames import ErrorFrame, Frame, TTSAudioRawFrame
+from pipecat.services.settings import TTSSettings
 from pipecat.services.tts_service import TTSService
 
 DEFAULT_BASE_URL = "http://127.0.0.1:17600"
@@ -63,13 +64,20 @@ class VoiceboxTTSService(TTSService):
     ) -> None:
         # NOTE: base TTSService attributes (self.sample_rate / self.chunk_size)
         # are 0 until pipeline setup - do not rely on them here.
-        super().__init__(**kwargs)
+        self._profile_id = profile_id or os.environ.get("VOICEBOX_PROFILE_ID", "")
+        self._engine = engine
+        super().__init__(
+            settings=TTSSettings(
+                model=self._engine,
+                voice=self._profile_id or None,
+                language=None,
+            ),
+            **kwargs,
+        )
         self._chunk_size = max(1, int(chunk_size))
         self._base_url = (
             base_url or os.environ.get("VOICEBOX_URL", DEFAULT_BASE_URL)
         ).rstrip("/")
-        self._profile_id = profile_id or os.environ.get("VOICEBOX_PROFILE_ID", "")
-        self._engine = engine
         self._client_header = {"X-Voicebox-Client-Id": client_id}
         self._http = http_client or httpx.AsyncClient(
             base_url=self._base_url, timeout=httpx.Timeout(120.0)
