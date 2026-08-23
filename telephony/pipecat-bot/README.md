@@ -29,7 +29,7 @@ A complete Pipecat voice agent with Voicebox as the TTS/STT backend, LiveKit for
 
 1. **Voicebox** running on `http://127.0.0.1:17600` (GPU-enabled podman container)
 2. **LiveKit server** — local dev server or LiveKit Cloud
-3. **Ollama** running locally with a model pulled
+3. **llama.cpp server** running on `http://localhost:19091/v1` (Qwen2.5-3B-Instruct)
 
 ### Start dependencies
 
@@ -37,8 +37,8 @@ A complete Pipecat voice agent with Voicebox as the TTS/STT backend, LiveKit for
 # Voicebox (from repo root)
 ./scripts/upstream-up.sh
 
-# Ollama - pull a model
-ollama pull llama3.2
+# llama.cpp server (already running in podman as 'llama-small')
+# If not running: docker run --gpus all -p 19091:8080 ghcr.io/ggml-org/llama.cpp:server-cuda13 -m /models/Qwen2.5-3B-Instruct-Q4_K_M.gguf --host 0.0.0.0 --port 8080
 
 # LiveKit local dev server (Docker)
 docker run --rm -p 7880:7880 -p 7881:7881 -p 7882:7882/udp \
@@ -67,6 +67,18 @@ uv run voicebot
 ```
 
 The agent joins the LiveKit room and waits for participants. Connect a LiveKit client (web, mobile, SIP) to talk to it.
+
+## Web test client
+
+Open `test-client.html` in a browser (or serve it):
+
+```bash
+cd telephony/pipecat-bot
+python3 -m http.server 8080
+# Then open http://localhost:8080/test-client.html
+```
+
+Enter the same room name (`voicebot-room`), click **Join Room**, allow microphone access, and speak. The bot will respond via your speakers.
 
 ## Architecture
 

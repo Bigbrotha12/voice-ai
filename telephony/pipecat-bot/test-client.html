@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Voicebot Test Client</title>
+  <script type="module">
+    import { Room, RemoteParticipant, RoomEvent, Track } from 'https://cdn.jsdelivr.net/npm/livekit-client@2.5.0/+esm';
+  </script>
+  <style>
+    * { box-sizing: border-box; font-family: system-ui, sans-serif; }
+    body { max-width: 600px; margin: 2rem auto; padding: 1rem; }
+    .panel { border: 1px solid #ddd; border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
+    .panel h3 { margin-top: 0; }
+    label { display: block; margin-bottom: 0.5rem; }
+    input, select { width: 100%; padding: 0.5rem; margin-bottom: 1rem; font-size: 1rem; }
+    button { width: 100%; padding: 0.75rem; font-size: 1rem; cursor: pointer; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-primary { background: #2563eb; color: white; border: none; border-radius: 6px; }
+    .btn-danger { background: #dc2626; color: white; border: none; border-radius: 6px; }
+    .status { padding: 0.75rem; border-radius: 6px; margin-bottom: 1rem; font-weight: 500; }
+    .status.connecting { background: #fef3c7; color: #92400e; }
+    .status.connected { background: #d1fae5; color: #065f46; }
+    .status.error { background: #fee2e2; color: #991b1b; }
+    .logs { max-height: 200px; overflow-y: auto; background: #1e1e1e; color: #e5e5e5; padding: 0.75rem; border-radius: 6px; font-family: monospace; font-size: 0.85rem; }
+    .log-entry { margin: 0.25rem 0; }
+    .log-entry.info { color: #93c5fd; }
+    .log-entry.warn { color: #fcd34d; }
+    .log-entry.error { color: #fca5a5; }
+    .audio-level { height: 8px; background: #e5e7eb; border-radius: 4px; overflow: hidden; margin-top: 0.5rem; }
+    .audio-level-bar { height: 100%; background: #2563eb; width: 0%; transition: width 50ms; }
+    .muted { opacity: 0.6; }
+  </style>
+</head>
+<body>
+  <h1>Voicebot Test Client</h1>
+
+  <div class="panel">
+    <h3>Connection</h3>
+    <label>LiveKit URL <input id="url" value="ws://localhost:7880" placeholder="ws://localhost:7880"></label>
+    <label>Room Name <input id="room" value="voicebot-room" placeholder="voicebot-room"></label>
+    <label>Participant Name <input id="name" value="User" placeholder="Your name"></label>
+    <button id="joinBtn" class="btn-primary">Join Room</button>
+    <button id="leaveBtn" class="btn-danger" disabled>Leave Room</button>
+    <div id="status" class="status" style="display:none;"></div>
+  </div>
+
+  <div class="panel" id="mediaPanel" style="display:none;">
+    <h3>Media</h3>
+    <label>
+      <input type="checkbox" id="muteMic"> Mute microphone
+    </label>
+    <div class="audio-level">
+      <div id="micLevel" class="audio-level-bar"></div>
+    </div>
+    <p style="margin-top:0.5rem; font-size:0.9rem; color:#666;">
+      Speak to the bot. It will respond via your speakers.
+    </p>
+  </div>
+
+  <div class="panel">
+    <h3>Logs</h3>
+    <div id="logs" class="logs"></div>
+  </div>
+
+  <script type="module">
+    import { Room, RemoteParticipant, RoomEvent, Track } from 'https://cdn.jsdelivr.net/npm/livekit-client@2.5.0/+esm';
+
+    const urlInput = document.getElementById('url');
+    const roomInput = document.getElementById('room');
+    const nameInput = document.getElementById('name');
+    const joinBtn = document.getElementById('joinBtn');
+    const leaveBtn = document.getElementById('leaveBtn');
+    const statusDiv = document.getElementById('status');
+    const mediaPanel = document.getElementById('mediaPanel');
+    const muteMic = document.getElementById('muteMic');
+    const micLevel = document.getElementById('micLevel');
+    const logsDiv = document.getElementById('logs');
+
+    let room = null;
+    let localAudioTrack = null;
+    let audioContext = null;
+    let analyser = null;
+    let animationFrame = null;
+
+    function log(msg, level = 'info') {
+      const entry = document.createElement('div');
+      entry.className = `log-entry ${level}`;
+      entry.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+      logsDiv.appendChild(entry);
+      logsDiv.scrollTop = logsDiv.scrollHeight;
+    }
+
+    function setStatus(text, cls) {
+      statusDiv.textContent = text;
+      statusDiv.className = `status ${cls}`;
+      statusDiv.style.display = 'block';
+    }
+
+    async function getToken() {
+      // For dev server, token can be empty or simple JWT
+      // In production, fetch from your backend
+      const url = urlInput.value;
+      const roomName = roomInput.value;
+      const identity = nameInput.value;
+
+      // Generate a dev token (works with --dev server)
+      // LiveKit dev server accepts any token with valid format
+      const payload = {
+        iss: 'devkey',
+        sub: identity,
+        nbf: Math.floor(Date.now() / 1000),
+        exp: Math.floor(Date.now() / 1000) + 3600,
+        video: { room: roomName, roomJoin: true, canPublish: true, canSubscribe: true, canPublishData: true }
+      };
+      const header = { alg: 'HS256', typ: 'JWT' };
+      const b64 = (obj) => btoa(JSON.stringify(obj)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+      const signature = await crypto.subtle.sign(
+        'HMAC',
+        await crypto.subtle.importKey('raw', new TextEncoder().encode('secret'), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']),
+        new TextEncoder().encode(`${b64(header)}.${b64(payload)}`)
+      );
+      const sigB64 = btoa(String.fromCharCode(...new Uint8Array(signature))).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+      return `${b64(header)}.${b64(payload)}.${sigB64}`;
+    }
+
+    function startAudioLevelMonitoring(track) {
+      if (!audioContext) {
+        audioContext = new AudioContext();
+      }
+      const stream = new MediaStream([track.mediaStreamTrack]);
+      const source = audioContext.createMediaStreamSource(stream);
+      analyser = audioContext.createAnalyser();
+      analyser.fftSize = 256;
+      source.connect(analyser);
+
+      function updateLevel() {
+        const data = new Uint8Array(analyser.frequencyBinCount);
+        analyser.getByteFrequencyData(data);
+        let sum = 0;
+        for (let i = 0; i < data.length; i++) sum += data[i];
+        const avg = sum / data.length;
+        const level = Math.min(100, (avg / 128) * 100);
+        micLevel.style.width = `${level}%`;
+        animationFrame = requestAnimationFrame(updateLevel);
+      }
+      updateLevel();
+    }
+
+    function stopAudioLevelMonitoring() {
+      if (animationFrame) cancelAnimationFrame(animationFrame);
+      if (audioContext) { audioContext.close(); audioContext = null; }
+      micLevel.style.width = '0%';
+    }
+
+    async function join() {
+      joinBtn.disabled = true;
+      setStatus('Connecting...', 'connecting');
+      log('Connecting to LiveKit...');
+
+      try {
+        const token = await getToken();
+        room = new Room({
+          adaptiveStream: true,
+          dynacast: true,
+        });
+
+        room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
+          if (track.kind === Track.Kind.Audio) {
+            log(`Subscribed to audio from ${participant.identity}`, 'info');
+            const audioEl = document.createElement('audio');
+            audioEl.srcObject = new MediaStream([track.mediaStreamTrack]);
+            audioEl.autoplay = true;
+            audioEl.playsInline = true;
+            document.body.appendChild(audioEl);
+          }
+        });
+
+        room.on(RoomEvent.ParticipantConnected, (participant) => {
+          log(`Participant connected: ${participant.identity}`, 'info');
+        });
+
+        room.on(RoomEvent.ParticipantDisconnected, (participant) => {
+          log(`Participant disconnected: ${participant.identity}`, 'warn');
+        });
+
+        room.on(RoomEvent.Disconnected, () => {
+          log('Disconnected from room', 'warn');
+          cleanup();
+        });
+
+        await room.connect(urlInput.value, token);
+        setStatus('Connected! Speak to the bot.', 'connected');
+        log('Connected to room', 'info');
+
+        // Publish microphone
+        localAudioTrack = await Room.createLocalAudioTrack({
+          name: 'microphone',
+          // Auto-gain control, echo cancellation, noise suppression
+        });
+        await room.localParticipant.publishTrack(localAudioTrack);
+        log('Microphone published', 'info');
+
+        startAudioLevelMonitoring(localAudioTrack);
+        mediaPanel.style.display = 'block';
+        joinBtn.disabled = true;
+        leaveBtn.disabled = false;
+        urlInput.disabled = true;
+        roomInput.disabled = true;
+        nameInput.disabled = true;
+
+      } catch (err) {
+        log(`Connection failed: ${err.message}`, 'error');
+        setStatus(`Error: ${err.message}`, 'error');
+        joinBtn.disabled = false;
+      }
+    }
+
+    function cleanup() {
+      stopAudioLevelMonitoring();
+      if (localAudioTrack) {
+        localAudioTrack.stop();
+        localAudioTrack = null;
+      }
+      if (room) {
+        room.disconnect();
+        room = null;
+      }
+      mediaPanel.style.display = 'none';
+      joinBtn.disabled = false;
+      leaveBtn.disabled = true;
+      urlInput.disabled = false;
+      roomInput.disabled = false;
+      nameInput.disabled = false;
+      setStatus('', '');
+    }
+
+    async function leave() {
+      log('Leaving room...');
+      cleanup();
+      setStatus('Disconnected', '');
+    }
+
+    muteMic.addEventListener('change', () => {
+      if (localAudioTrack) {
+        localAudioTrack.setEnabled(!muteMic.checked);
+        log(muteMic.checked ? 'Microphone muted' : 'Microphone unmuted', muteMic.checked ? 'warn' : 'info');
+      }
+    });
+
+    joinBtn.addEventListener('click', join);
+    leaveBtn.addEventListener('click', leave);
+
+    // Handle page unload
+    window.addEventListener('beforeunload', () => {
+      if (room) cleanup();
+    });
+  </script>
+</body>
+</html>
