@@ -204,8 +204,9 @@ Kokoro is no longer the assumed fallback.
 
 **TTS adapter complete**: `telephony/pipecat-bot/src/voicebot/tts.py` — `VoiceboxTTSService` wraps `POST /generate/stream`, parses WAV header, yields raw PCM frames. 8 unit tests pass. See `telephony/pipecat-bot/README.md` for usage.
 
+**STT adapter complete**: `telephony/pipecat-bot/src/voicebot/stt.py` — `VoiceboxSTTService` wraps `POST /transcribe` (batch Whisper transcription). 5 unit tests pass. Note: batch-oriented, not streaming - suitable for dictation-style use cases.
+
 **Remaining Phase 4 work**:
-- STT adapter (wrap Voicebox `/transcribe` or use faster-whisper directly)
 - Transport integration (Daily/LiveKit/LiveKit SIP)
 - LLM integration (any Pipecat-compatible service)
 - End-to-end agent loop with VAD + turn-taking

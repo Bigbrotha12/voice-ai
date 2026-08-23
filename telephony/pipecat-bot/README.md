@@ -10,14 +10,21 @@ A minimal Pipecat service that wraps Voicebox's REST API (`POST /generate/stream
   - Falls back to `VOICEBOX_URL` / `VOICEBOX_PROFILE_ID` env vars
   - 8 unit tests (header parsing, PCM extraction, error paths)
 
+- **`VoiceboxSTTService`** (`src/voicebot/stt.py`) — Pipecat `STTService` subclass
+  - Batch transcription via Voicebox's `/transcribe` endpoint (Whisper backend)
+  - Configurable: `base_url`, `model` (turbo/base/small/medium/large), `client_id`
+  - Falls back to `VOICEBOX_URL` env var
+  - 5 unit tests (transcription, empty text, error paths)
+  - Note: batch-oriented, not streaming - suitable for dictation-style use cases
+
 ## What's needed next
 
-This is a **TTS adapter only**. To run a full voice agent you need:
+This is a **TTS + STT adapter**. To run a full voice agent you need:
 
 1. **Transport** — Daily, LiveKit, or self-hosted LiveKit SIP (see `telephony/RESEARCH.md`)
 2. **LLM** — any Pipecat-compatible LLM service (OpenAI, Anthropic, local)
-3. **STT** — Deepgram, faster-whisper, or Voicebox's `/transcribe` (not yet wrapped)
-4. **VAD** — Pipecat's built-in Silero VAD (included in `[silero]` extra)
+3. **VAD** — Pipecat's built-in Silero VAD (included in `[silero]` extra)
+4. **End-to-end agent loop** — wire VAD → STT → LLM → TTS → transport
 
 ## Usage
 
@@ -25,6 +32,7 @@ This is a **TTS adapter only**. To run a full voice agent you need:
 from pipecat.pipeline import Pipeline
 from pipecat.services.openai.llm import OpenAILLMService
 from voicebot.tts import VoiceboxTTSService
+from voicebot.stt import VoiceboxSTTService
 
 tts = VoiceboxTTSService(
     base_url="http://127.0.0.1:17600",
@@ -32,8 +40,13 @@ tts = VoiceboxTTSService(
     engine="kokoro",
 )
 
+stt = VoiceboxSTTService(
+    base_url="http://127.0.0.1:17600",
+    model="turbo",
+)
+
 pipeline = Pipeline([
-    # ... VAD, STT, LLM, tts, transport
+    # ... VAD, stt, LLM, tts, transport
 ])
 ```
 
