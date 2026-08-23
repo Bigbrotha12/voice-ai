@@ -4,16 +4,14 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Voicebot Test Client</title>
-  <script type="module">
-    import { Room, RemoteParticipant, RoomEvent, Track, createLocalAudioTrack } from 'https://cdn.jsdelivr.net/npm/livekit-client@2.5.0/dist/livekit-client.esm.mjs';
-  </script>
+  <script src="vendor/livekit-client.umd.js"></script>
   <style>
     * { box-sizing: border-box; font-family: system-ui, sans-serif; }
     body { max-width: 600px; margin: 2rem auto; padding: 1rem; }
     .panel { border: 1px solid #ddd; border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
     .panel h3 { margin-top: 0; }
     label { display: block; margin-bottom: 0.5rem; }
-    input, select { width: 100%; padding: 0.5rem; margin-bottom: 1rem; font-size: 1rem; }
+    input { width: 100%; padding: 0.5rem; margin-bottom: 1rem; font-size: 1rem; }
     button { width: 100%; padding: 0.75rem; font-size: 1rem; cursor: pointer; }
     button:disabled { opacity: 0.5; cursor: not-allowed; }
     .btn-primary { background: #2563eb; color: white; border: none; border-radius: 6px; }
@@ -29,7 +27,6 @@
     .log-entry.error { color: #fca5a5; }
     .audio-level { height: 8px; background: #e5e7eb; border-radius: 4px; overflow: hidden; margin-top: 0.5rem; }
     .audio-level-bar { height: 100%; background: #2563eb; width: 0%; transition: width 50ms; }
-    .muted { opacity: 0.6; }
   </style>
 </head>
 <body>
@@ -37,9 +34,9 @@
 
   <div class="panel">
     <h3>Connection</h3>
-    <label>LiveKit URL <input id="url" value="ws://localhost:7880" placeholder="ws://localhost:7880"></label>
-    <label>Room Name <input id="room" value="voicebot-room" placeholder="voicebot-room"></label>
-    <label>Participant Name <input id="name" value="User" placeholder="Your name"></label>
+    <label>LiveKit URL <input id="url" value="ws://localhost:7880"></label>
+    <label>Room Name <input id="room" value="voicebot-room"></label>
+    <label>Participant Name <input id="name" value="User"></label>
     <button id="joinBtn" class="btn-primary">Join Room</button>
     <button id="leaveBtn" class="btn-danger" disabled>Leave Room</button>
     <div id="status" class="status" style="display:none;"></div>
@@ -47,12 +44,8 @@
 
   <div class="panel" id="mediaPanel" style="display:none;">
     <h3>Media</h3>
-    <label>
-      <input type="checkbox" id="muteMic"> Mute microphone
-    </label>
-    <div class="audio-level">
-      <div id="micLevel" class="audio-level-bar"></div>
-    </div>
+    <label><input type="checkbox" id="muteMic"> Mute microphone</label>
+    <div class="audio-level"><div id="micLevel" class="audio-level-bar"></div></div>
     <p style="margin-top:0.5rem; font-size:0.9rem; color:#666;">
       Speak to the bot. It will respond via your speakers.
     </p>
@@ -63,9 +56,9 @@
     <div id="logs" class="logs"></div>
   </div>
 
-  <script type="module">
-    import { Room, RemoteParticipant, RoomEvent, Track } from 'https://cdn.jsdelivr.net/npm/livekit-client@2.5.0/+esm';
+  <audio id="remoteAudio" autoplay></audio>
 
+  <script>
     const urlInput = document.getElementById('url');
     const roomInput = document.getElementById('room');
     const nameInput = document.getElementById('name');
@@ -76,7 +69,9 @@
     const muteMic = document.getElementById('muteMic');
     const micLevel = document.getElementById('micLevel');
     const logsDiv = document.getElementById('logs');
+    const remoteAudioEl = document.getElementById('remoteAudio');
 
+    const LK = window.LivekitClient;
     let room = null;
     let localAudioTrack = null;
     let audioContext = null;
@@ -94,151 +89,117 @@
     function setStatus(text, cls) {
       statusDiv.textContent = text;
       statusDiv.className = `status ${cls}`;
-      statusDiv.style.display = 'block';
+      statusDiv.style.display = text ? 'block' : 'none';
     }
 
-    async function getToken() {
-      // For dev server, token can be empty or simple JWT
-      // In production, fetch from your backend
-      const url = urlInput.value;
-      const roomName = roomInput.value;
-      const identity = nameInput.value;
-
-      // Generate a dev token (works with --dev server)
-      // LiveKit dev server accepts any token with valid format
+    async function getToken(roomName, identity) {
+      const header = { alg: 'HS256', typ: 'JWT' };
       const payload = {
         iss: 'devkey',
         sub: identity,
-        nbf: Math.floor(Date.now() / 1000),
+        nbf: Math.floor(Date.now() / 1000) - 10,
         exp: Math.floor(Date.now() / 1000) + 3600,
-        video: { room: roomName, roomJoin: true, canPublish: true, canSubscribe: true, canPublishData: true }
+        video: {
+          room: roomName,
+          roomJoin: true,
+          canPublish: true,
+          canSubscribe: true,
+          canPublishData: true
+        }
       };
-      const header = { alg: 'HS256', typ: 'JWT' };
-      const b64 = (obj) => btoa(JSON.stringify(obj)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-      const signature = await crypto.subtle.sign(
-        'HMAC',
-        await crypto.subtle.importKey('raw', new TextEncoder().encode('secret'), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']),
-        new TextEncoder().encode(`${b64(header)}.${b64(payload)}`)
+      const b64url = (bytes) => btoa(String.fromCharCode(...new Uint8Array(bytes)))
+        .replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+      const enc = new TextEncoder();
+      const data = `${b64url(enc.encode(JSON.stringify(header)))}.${b64url(enc.encode(JSON.stringify(payload)))}`;
+      const key = await crypto.subtle.importKey(
+        'raw', enc.encode('secret'), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
       );
-      const sigB64 = btoa(String.fromCharCode(...new Uint8Array(signature))).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-      return `${b64(header)}.${b64(payload)}.${sigB64}`;
+      const sig = await crypto.subtle.sign('HMAC', key, enc.encode(data));
+      return `${data}.${b64url(sig)}`;
     }
 
-    function startAudioLevelMonitoring(track) {
-      if (!audioContext) {
-        audioContext = new AudioContext();
-      }
-      const stream = new MediaStream([track.mediaStreamTrack]);
-      const source = audioContext.createMediaStreamSource(stream);
+    function startMicLevel(track) {
+      if (!audioContext) audioContext = new AudioContext();
+      const source = audioContext.createMediaStreamSource(new MediaStream([track.mediaStreamTrack]));
       analyser = audioContext.createAnalyser();
       analyser.fftSize = 256;
       source.connect(analyser);
-
-      function updateLevel() {
-        const data = new Uint8Array(analyser.frequencyBinCount);
+      const data = new Uint8Array(analyser.frequencyBinCount);
+      (function update() {
         analyser.getByteFrequencyData(data);
         let sum = 0;
         for (let i = 0; i < data.length; i++) sum += data[i];
-        const avg = sum / data.length;
-        const level = Math.min(100, (avg / 128) * 100);
-        micLevel.style.width = `${level}%`;
-        animationFrame = requestAnimationFrame(updateLevel);
-      }
-      updateLevel();
+        micLevel.style.width = `${Math.min(100, (sum / data.length / 128) * 100)}%`;
+        animationFrame = requestAnimationFrame(update);
+      })();
     }
 
-    function stopAudioLevelMonitoring() {
+    function stopMicLevel() {
       if (animationFrame) cancelAnimationFrame(animationFrame);
       if (audioContext) { audioContext.close(); audioContext = null; }
       micLevel.style.width = '0%';
     }
 
     async function join() {
+      if (!LK || !LK.Room || !LK.createLocalAudioTrack) {
+        log(`livekit-client failed to load (LivekitClient=${typeof LK})`, 'error');
+        setStatus('SDK not loaded — check vendor/livekit-client.umd.js', 'error');
+        return;
+      }
       joinBtn.disabled = true;
       setStatus('Connecting...', 'connecting');
-      log('Connecting to LiveKit...');
 
       try {
-        const token = await getToken();
-        room = new Room({
-          adaptiveStream: true,
-          dynacast: true,
-        });
+        const token = await getToken(roomInput.value.trim(), nameInput.value.trim() || 'User');
+        room = new LK.Room({ adaptiveStream: true, dynacast: true });
 
-        room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
-          if (track.kind === Track.Kind.Audio) {
-            log(`Subscribed to audio from ${participant.identity}`, 'info');
-            const audioEl = document.createElement('audio');
-            audioEl.srcObject = new MediaStream([track.mediaStreamTrack]);
-            audioEl.autoplay = true;
-            audioEl.playsInline = true;
-            document.body.appendChild(audioEl);
+        room.on(LK.RoomEvent.TrackSubscribed, (track, pub, participant) => {
+          log(`Subscribed to ${track.kind} from ${participant.identity}`);
+          if (track.kind === LK.Track.Kind.Audio) {
+            track.attach(remoteAudioEl);
+            remoteAudioEl.play().catch((e) => log(`Playback blocked: ${e.message}`, 'warn'));
           }
         });
 
-        room.on(RoomEvent.ParticipantConnected, (participant) => {
-          log(`Participant connected: ${participant.identity}`, 'info');
-        });
+        room.on(LK.RoomEvent.ParticipantConnected, (p) => log(`Participant connected: ${p.identity}`));
+        room.on(LK.RoomEvent.ParticipantDisconnected, (p) => log(`Participant disconnected: ${p.identity}`, 'warn'));
 
-        room.on(RoomEvent.ParticipantDisconnected, (participant) => {
-          log(`Participant disconnected: ${participant.identity}`, 'warn');
-        });
-
-        room.on(RoomEvent.Disconnected, () => {
-          log('Disconnected from room', 'warn');
+        room.on(LK.RoomEvent.Disconnected, (reason) => {
+          log(`Disconnected${reason ? ` (${reason})` : ''}`, 'warn');
           cleanup();
         });
 
-        await room.connect(urlInput.value, token);
-        setStatus('Connected! Speak to the bot.', 'connected');
-        log('Connected to room', 'info');
+        await room.connect(urlInput.value.trim(), token);
+        log('Connected to room');
 
-        // Publish microphone
-        localAudioTrack = await createLocalAudioTrack({
-          name: 'microphone',
-          // Auto-gain control, echo cancellation, noise suppression
-        });
+        remoteAudioEl.play().catch(() => {});
+
+        localAudioTrack = await LK.createLocalAudioTrack({ name: 'microphone' });
         await room.localParticipant.publishTrack(localAudioTrack);
-        log('Microphone published', 'info');
+        log('Microphone published');
 
-        startAudioLevelMonitoring(localAudioTrack);
+        startMicLevel(localAudioTrack);
         mediaPanel.style.display = 'block';
-        joinBtn.disabled = true;
         leaveBtn.disabled = false;
-        urlInput.disabled = true;
-        roomInput.disabled = true;
-        nameInput.disabled = true;
-
+        urlInput.disabled = roomInput.disabled = nameInput.disabled = true;
+        setStatus('Connected! Speak to the bot.', 'connected');
       } catch (err) {
         log(`Connection failed: ${err.message}`, 'error');
         setStatus(`Error: ${err.message}`, 'error');
-        joinBtn.disabled = false;
+        cleanup();
       }
     }
 
     function cleanup() {
-      stopAudioLevelMonitoring();
-      if (localAudioTrack) {
-        localAudioTrack.stop();
-        localAudioTrack = null;
-      }
-      if (room) {
-        room.disconnect();
-        room = null;
-      }
+      stopMicLevel();
+      if (localAudioTrack) { localAudioTrack.stop(); localAudioTrack = null; }
+      if (room) { room.disconnect().catch(() => {}); room = null; }
+      remoteAudioEl.srcObject = null;
       mediaPanel.style.display = 'none';
       joinBtn.disabled = false;
       leaveBtn.disabled = true;
-      urlInput.disabled = false;
-      roomInput.disabled = false;
-      nameInput.disabled = false;
-      setStatus('', '');
-    }
-
-    async function leave() {
-      log('Leaving room...');
-      cleanup();
-      setStatus('Disconnected', '');
+      urlInput.disabled = roomInput.disabled = nameInput.disabled = false;
+      muteMic.checked = false;
     }
 
     muteMic.addEventListener('change', () => {
@@ -249,12 +210,11 @@
     });
 
     joinBtn.addEventListener('click', join);
-    leaveBtn.addEventListener('click', leave);
+    leaveBtn.addEventListener('click', () => { log('Leaving room...'); cleanup(); });
+    window.addEventListener('beforeunload', () => { if (room) cleanup(); });
 
-    // Handle page unload
-    window.addEventListener('beforeunload', () => {
-      if (room) cleanup();
-    });
+    log(`SDK loaded: LivekitClient ${LK ? LK.version || '(version n/a)' : 'MISSING'}`,
+        LK && LK.createLocalAudioTrack ? 'info' : 'error');
   </script>
 </body>
 </html>
