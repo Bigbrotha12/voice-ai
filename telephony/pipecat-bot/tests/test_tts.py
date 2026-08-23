@@ -21,7 +21,7 @@ def make_wav(pcm: bytes, sample_rate: int = 24000, channels: int = 1) -> bytes:
     return buf.getvalue()
 
 
-def make_service(handler) -> VoiceboxTTSService:
+def make_service(handler, chunk_size: int = 8192) -> VoiceboxTTSService:
     return VoiceboxTTSService(
         base_url="http://test",
         profile_id="p1",
@@ -29,6 +29,7 @@ def make_service(handler) -> VoiceboxTTSService:
         http_client=httpx.AsyncClient(
             base_url="http://test", transport=httpx.MockTransport(handler)
         ),
+        chunk_size=chunk_size,
         sample_rate=24000,
     )
 
@@ -61,6 +62,54 @@ class TestParseWavHeader:
 
 
 class TestRunTts:
+    def test_run_tts_matches_pipecat_contract(self):
+        """run_tts(text, context_id) - Pipecat calls it with these two args."""
+        import inspect
+
+        from pipecat.services.tts_service import TTSService
+
+        params = list(inspect.signature(VoiceboxTTSService.run_tts).parameters.values())
+        base_params = list(inspect.signature(TTSService.run_tts).parameters.values())
+        assert [p.name for p in params[1:]] == [p.name for p in base_params[1:]]
+
+    @pytest.mark.asyncio
+    async def test_header_split_across_chunks(self):
+        pcm = bytes(range(256)) * 4
+        wav = make_wav(pcm)
+
+        def handler(request):
+            return httpx.Response(200, content=wav)
+
+        frames = [
+            f
+            for f in await collect(make_service(handler, chunk_size=7))
+            if type(f).__name__ == "TTSAudioRawFrame"
+        ]
+        assert b"".join(f.audio for f in frames) == pcm
+
+    @pytest.mark.asyncio
+    async def test_zero_pcm_body_yields_error_frame(self):
+        def handler(request):
+            return httpx.Response(200, headers={"content-type": "audio/wav"}, content=make_wav(b""))
+
+        frames = await collect(make_service(handler))
+        assert any(type(f).__name__ == "ErrorFrame" for f in frames)
+        assert not any(type(f).__name__ == "TTSAudioRawFrame" for f in frames)
+
+    @pytest.mark.asyncio
+    async def test_stereo_channels_passed_through(self):
+        pcm = bytes(range(256)) * 8
+
+        def handler(request):
+            return httpx.Response(200, content=make_wav(pcm, channels=2))
+
+        frames = [
+            f
+            for f in await collect(make_service(handler))
+            if type(f).__name__ == "TTSAudioRawFrame"
+        ]
+        assert {f.num_channels for f in frames} == {2}
+
     @pytest.mark.asyncio
     async def test_yields_pcm_stripped_of_header(self):
         pcm = bytes(range(256)) * 4

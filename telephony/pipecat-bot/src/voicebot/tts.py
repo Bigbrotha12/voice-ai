@@ -20,6 +20,7 @@ from pipecat.frames.frames import ErrorFrame, Frame, TTSAudioRawFrame
 from pipecat.services.tts_service import TTSService
 
 DEFAULT_BASE_URL = "http://127.0.0.1:17600"
+MAX_HEADER_SEARCH_BYTES = 65536
 
 
 def parse_wav_header(data: bytes) -> tuple[int, int, int]:
@@ -74,6 +75,10 @@ class VoiceboxTTSService(TTSService):
             base_url=self._base_url, timeout=httpx.Timeout(120.0)
         )
 
+    async def cleanup(self):
+        await super().cleanup()
+        await self._http.aclose()
+
     async def run_tts(self, text: str, context_id: str) -> AsyncGenerator[Frame | None, None]:
         try:
             async with self._http.stream(
@@ -97,14 +102,16 @@ class VoiceboxTTSService(TTSService):
                 buf = b""
                 header_parsed = False
                 rate = 24000
+                channels = 1
                 first_frame = True
+                produced_audio = False
                 async for chunk in resp.aiter_bytes(self._chunk_size):
                     buf += chunk
                     if not header_parsed:
                         try:
-                            offset, wav_rate, _channels = parse_wav_header(buf)
+                            offset, wav_rate, wav_channels = parse_wav_header(buf)
                         except ValueError:
-                            if len(buf) > 65536:
+                            if len(buf) > MAX_HEADER_SEARCH_BYTES:
                                 msg = "Voicebox response missing WAV header"
                                 logger.error(f"{self} {msg}")
                                 yield ErrorFrame(error=msg)
@@ -112,6 +119,7 @@ class VoiceboxTTSService(TTSService):
                             continue
                         buf = buf[offset:]
                         rate = wav_rate
+                        channels = wav_channels
                         header_parsed = True
 
                     while len(buf) >= self._chunk_size:
@@ -119,7 +127,8 @@ class VoiceboxTTSService(TTSService):
                         if first_frame:
                             await self.stop_ttfb_metrics()
                             first_frame = False
-                        yield TTSAudioRawFrame(piece, rate, 1, context_id=context_id)
+                        produced_audio = True
+                        yield TTSAudioRawFrame(piece, rate, channels, context_id=context_id)
 
                 if not header_parsed:
                     msg = "Voicebox response ended without WAV header"
@@ -129,7 +138,14 @@ class VoiceboxTTSService(TTSService):
                 if buf:
                     if first_frame:
                         await self.stop_ttfb_metrics()
-                    yield TTSAudioRawFrame(buf, rate, 1, context_id=context_id)
+                    produced_audio = True
+                    yield TTSAudioRawFrame(buf, rate, channels, context_id=context_id)
+                if not produced_audio:
+                    msg = "Voicebox returned a valid WAV header with no audio data"
+                    logger.error(f"{self} {msg}")
+                    if first_frame:
+                        await self.stop_ttfb_metrics()
+                    yield ErrorFrame(error=msg)
         except Exception as exc:
             logger.error(f"{self} Voicebox synthesis failed: {exc!r}")
             yield ErrorFrame(error=f"Voicebox synthesis failed: {exc!r}")

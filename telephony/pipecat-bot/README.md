@@ -74,7 +74,7 @@ Open `test-client.html` in a browser (or serve it):
 
 ```bash
 cd telephony/pipecat-bot
-python3 -m http.server 8080
+python3 -m http.server 8080 --bind 127.0.0.1
 # Then open http://localhost:8080/test-client.html
 ```
 
@@ -86,7 +86,7 @@ Enter the same room name (`voicebot-room`), click **Join Room**, allow microphon
 ┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
 │  LiveKit    │────▶│ Voicebox    │────▶│   Ollama    │────▶│ Voicebox    │
 │  Transport  │     │   STT       │     │   LLM       │     │   TTS       │
-│  (audio)    │     │ (Whisper)   │     │ (llama3.2)  │     │ (kokoro)    │
+│  (audio)    │     │ (Whisper)   │     │ (Qwen2.5-3B)│     │ (kokoro)    │
 └─────────────┘     └─────────────┘     └─────────────┘     └─────────────┘
        ▲                                                                   │
        └───────────────────────────────────────────────────────────────────┘

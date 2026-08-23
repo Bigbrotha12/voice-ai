@@ -22,15 +22,15 @@ from __future__ import annotations
 
 import os
 import asyncio
-from contextlib import asynccontextmanager
 
 from livekit import api
+from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineTask
+from pipecat.processors.audio.vad_processor import VADProcessor
 from pipecat.transports.livekit.transport import LiveKitParams, LiveKitTransport
 from pipecat.services.ollama.llm import OLLamaLLMService
-from pipecat.frames.frames import Frame
 
 from voicebot.tts import VoiceboxTTSService
 from voicebot.stt import VoiceboxSTTService
@@ -71,7 +71,7 @@ def generate_token(identity: str = "voicebot") -> str:
 
 # ─── Pipeline construction ────────────────────────────────────────────────
 
-def build_pipeline() -> Pipeline:
+def build_pipeline() -> tuple[Pipeline, LiveKitTransport]:
     """Construct the full voice agent pipeline."""
 
     # LiveKit transport
@@ -87,16 +87,16 @@ def build_pipeline() -> Pipeline:
         ),
     )
 
-    # STT: Voicebox Whisper (batch, not streaming)
+    # STT: Voicebox Whisper (batch per VAD-segmented utterance)
     stt = VoiceboxSTTService(
         base_url=VOICEBOX_URL,
         model="turbo",
         client_id="voicebot-agent",
     )
 
-    # LLM: Local Ollama
+    # LLM: llama.cpp server (OpenAI-compatible)
     llm = OLLamaLLMService(
-        model=OLLAMA_MODEL,
+        settings=OLLamaLLMService.Settings(model=OLLAMA_MODEL),
         base_url=OLLAMA_BASE_URL,
     )
 
@@ -111,9 +111,10 @@ def build_pipeline() -> Pipeline:
         client_id="voicebot-agent",
     )
 
-    # Pipeline: transport → STT → LLM → TTS → transport
+    # Pipeline: transport → VAD → STT → LLM → TTS → transport
     pipeline = Pipeline([
         transport.input(),
+        VADProcessor(vad_analyzer=SileroVADAnalyzer()),
         stt,
         llm,
         tts,
@@ -138,11 +139,12 @@ async def main():
     @transport.event_handler("on_participant_disconnected")
     async def on_participant_disconnected(transport, participant_id: str):
         print(f"Participant disconnected: {participant_id}")
-        await task.cancel()
+        if not transport.get_participants():
+            await task.cancel()
 
     print(f"Starting voice agent in room '{LIVEKIT_ROOM}'...")
     print(f"LiveKit: {LIVEKIT_URL}")
-    print(f"Ollama: {OLLAMA_MODEL} @ {OLLAMA_BASE_URL}")
+    print(f"LLM: {OLLAMA_MODEL} @ {OLLAMA_BASE_URL}")
     print(f"Voicebox: {VOICEBOX_URL} ({VOICEBOX_ENGINE})")
 
     runner = PipelineRunner()

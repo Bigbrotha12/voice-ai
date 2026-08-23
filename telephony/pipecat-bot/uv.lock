@@ -909,7 +909,7 @@ dev = [
 requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
     { name = "livekit-api", specifier = ">=1.2" },
-    { name = "pipecat-ai", extras = ["silero", "livekit"], specifier = ">=0.0.70" },
+    { name = "pipecat-ai", extras = ["silero", "livekit"], specifier = "~=1.7.0" },
 ]
 
 [package.metadata.requires-dev]
