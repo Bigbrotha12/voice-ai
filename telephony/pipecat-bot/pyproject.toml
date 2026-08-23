@@ -1,0 +1,22 @@
+[project]
+name = "voicebot"
+version = "0.1.0"
+description = "Pipecat voice agent using Voicebox as TTS (Phase 4 groundwork)"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "pipecat-ai[silero]>=0.0.70",
+    "httpx>=0.27",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/voicebot"]
