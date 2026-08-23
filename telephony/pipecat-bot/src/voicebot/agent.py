@@ -132,12 +132,12 @@ async def main():
 
     # Handle participant events
     @transport.event_handler("on_participant_connected")
-    async def on_participant_connected(transport, participant):
-        print(f"Participant connected: {participant.identity}")
+    async def on_participant_connected(transport, participant_id: str):
+        print(f"Participant connected: {participant_id}")
 
     @transport.event_handler("on_participant_disconnected")
-    async def on_participant_disconnected(transport, participant):
-        print(f"Participant disconnected: {participant.identity}")
+    async def on_participant_disconnected(transport, participant_id: str):
+        print(f"Participant disconnected: {participant_id}")
         await task.cancel()
 
     print(f"Starting voice agent in room '{LIVEKIT_ROOM}'...")
