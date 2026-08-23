@@ -13,8 +13,13 @@ git clone https://github.com/jamiepine/voicebox.git ~/Projects/ai/voicebox-upstr
 cd ~/Projects/ai/voicebox-upstream
 git checkout v0.5.0        # pinned upstream version; bump deliberately, record in AGENTS.md
 
-podman-compose up -d --build   # first build takes several minutes
+./scripts/upstream-up.sh   # from THIS repo; first build takes several minutes
 ```
+
+Note: `upstream-up.sh` injects a scoped `CONTAINERS_REGISTRIES_CONF`
+(`docker/registries.conf` in this repo) so podman resolves the short
+base-image names in upstream's Dockerfile non-interactively - your global
+podman config stays untouched.
 
 Verify:
 

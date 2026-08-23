@@ -44,9 +44,10 @@ or patch upstream; everything we own lives in this repo.
 ## Commands
 
 ```sh
-# Upstream runtime (from ~/Projects/ai/voicebox-upstream)
-podman-compose up -d --build    # first build takes several minutes
-podman-compose logs -f          # watch startup; /health when ready
+# Upstream runtime (from this repo; injects scoped CONTAINERS_REGISTRIES_CONF)
+./scripts/upstream-up.sh        # build + start detached (first build: several minutes)
+./scripts/upstream-up.sh logs   # watch startup; /health when ready
+./scripts/upstream-up.sh down
 
 # Wrapper MCP server
 uv sync --directory services/voice-mcp
