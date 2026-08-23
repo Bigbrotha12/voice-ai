@@ -5,6 +5,8 @@ set -euo pipefail
 
 OUT_DIR="${VOICEBOX_OUTPUT_DIR:-$HOME/Projects/ai/voicebox-upstream/output}"
 
+[ -d "$OUT_DIR" ] || { echo "Output directory not found: $OUT_DIR"; exit 1; }
+
 latest=$(find "$OUT_DIR" -maxdepth 1 -name '*.wav' -printf '%T@ %p\n' 2>/dev/null \
   | sort -rn | head -1 | cut -d' ' -f2-)
 

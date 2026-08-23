@@ -1,7 +1,6 @@
 """Unit tests for the pure helpers in voicebox_client.
 
-These lock the defensive parsing around upstream response shapes. Update the
-fixtures the day Phase 1 verifies shapes against the live server.
+Fixture shapes verified against upstream v0.5.0 backend/routes source.
 """
 
 import pytest

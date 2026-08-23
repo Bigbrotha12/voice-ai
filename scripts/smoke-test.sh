@@ -52,8 +52,9 @@ echo "Generation id: $GEN_ID"
 
 say "Watching SSE status (timeout ${TIMEOUT_SECONDS}s)"
 # The stream closes itself once the generation reaches a terminal state.
+# curl exit 28 = --max-time hit = generation exceeded SMOKE_TIMEOUT.
 curl -fsS --max-time "$TIMEOUT_SECONDS" "$BASE_URL/generate/$GEN_ID/status" \
-  | sed -n 's/^data: //p' \
+  | sed -n 's/^data: *//p' \
   | python3 -c '
 import json, sys
 for line in sys.stdin:

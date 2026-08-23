@@ -6,8 +6,10 @@ env vars to be present (useful for tooling and tests).
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 DEFAULT_BASE_URL = "http://127.0.0.1:17600"
+DEFAULT_OUTPUT_DIR = "~/Projects/ai/voicebox-upstream/output"
 
 
 @dataclass(frozen=True)
@@ -16,6 +18,9 @@ class Settings:
     client_id: str
     default_profile: str | None
     say_timeout_seconds: float
+    output_dir: Path
+    player: str
+    warmup_ms: float
 
 
 def _float_env(name: str, default: str) -> float:
@@ -32,4 +37,9 @@ def load_settings() -> Settings:
         client_id=os.environ.get("VOICEBOX_CLIENT_ID", "voice-mcp"),
         default_profile=os.environ.get("DEFAULT_PROFILE") or None,
         say_timeout_seconds=_float_env("SAY_TIMEOUT_SECONDS", "120"),
+        output_dir=Path(
+            os.environ.get("VOICEBOX_OUTPUT_DIR", DEFAULT_OUTPUT_DIR)
+        ).expanduser(),
+        player=os.environ.get("VOICEBOX_PLAYER", "auto"),
+        warmup_ms=_float_env("VOICEBOX_WARMUP_MS", "250"),
     )

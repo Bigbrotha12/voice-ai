@@ -1,24 +1,28 @@
 """Wrapper MCP server exposing high-level voice tools over a local Voicebox.
 
 Tools:
-- say(text, ...)      Speak through Voicebox (plays on speakers) and wait for
-                      the generation to finish before returning.
-- listen(seconds)     STT from the microphone (not implemented yet; will fail
-                      until mic capture lands).
+- say(text, ...)      Generate speech via Voicebox, wait for completion (SSE),
+                      then play the wav host-side.
+- listen(seconds)     Record from the microphone, transcribe via Voicebox
+                      Whisper, return the text.
 - voices()            List available voice profiles.
 """
 
 from __future__ import annotations
 
+import asyncio
+from pathlib import Path
 from typing import Any
 
 from fastmcp import FastMCP
 
 from .config import load_settings
 from .mic import MicError, record
+from .playback import play_file
 from .voicebox_client import (
     VoiceboxClient,
     VoiceboxError,
+    classify,
     extract_generation_id,
 )
 
@@ -48,11 +52,11 @@ async def say(
     language: str | None = None,
     wait: bool = True,
 ) -> dict[str, Any]:
-    """Speak text aloud in one of your Voicebox voices.
+    """Speak text aloud in one of your Voicebox voices, then play the audio on this machine.
 
     Use this when you want to tell the user something by voice instead of
-    printing it. The audio plays on the user's speakers and an on-screen pill
-    shows that it is playing.
+    printing it. Generation happens server-side; playback happens host-side
+    (the headless container has no speakers). Blocks until audio finishes.
 
     Args:
         text: What to say. Plain text; keep it conversational. Note: long
@@ -63,12 +67,12 @@ async def say(
             control), qwen_custom_voice, luxtts, chatterbox, chatterbox_turbo,
             tada. Omit for the profile default.
         language: ISO language hint such as "en" or "de".
-        wait: When true (default), follows the server-sent status stream until
-            generation completes and includes final status in the result.
-            When false, returns the generation id immediately.
+        wait: When true (default), waits for generation to finish and plays
+            the result aloud. When false, returns the generation id without
+            waiting or playing.
 
     Returns:
-        {generation_id, status} so you can confirm delivery.
+        {generation_id, status, audio_path?, played?, play_detail?}.
     """
     client = _get_client()
     try:
@@ -84,36 +88,51 @@ async def say(
         "generation_id": gen_id,
         "status": response.get("status", "submitted"),
     }
-    if wait:
-        try:
-            final = await client.watch_status(gen_id, _settings.say_timeout_seconds)
-            result["status"] = final.get("status") or "done"
-            if final.get("duration"):
-                result["duration"] = final["duration"]
-        except (VoiceboxError, TimeoutError) as exc:
-            raise RuntimeError(
-                f"Spoke but could not confirm completion ({gen_id}): {exc}"
-            ) from exc
+    if not wait:
+        return result
+
+    try:
+        final = await client.watch_status(gen_id, _settings.say_timeout_seconds)
+        result["status"] = final.get("status") or "done"
+        if final.get("duration"):
+            result["duration"] = final["duration"]
+    except (VoiceboxError, TimeoutError) as exc:
+        raise RuntimeError(
+            f"Spoke but could not confirm completion ({gen_id}): {exc}"
+        ) from exc
+
+    if classify(str(result["status"])) == "done":
+        wav_path = _settings.output_dir / f"{gen_id}.wav"
+        played, detail = await asyncio.to_thread(play_file, _settings, str(wav_path))
+        result["audio_path"] = str(wav_path)
+        result["played"] = played
+        result["play_detail"] = detail
     return result
 
 
 @mcp.tool
 async def listen(seconds: float = 5.0) -> str:
-    """Record from the microphone and return the transcript.
+    """Record from this machine's microphone and return the transcript.
 
-    NOT IMPLEMENTED yet - currently always fails. Will record from the default
-    input device and return the transcribed text.
+    Records for `seconds`, then transcribes via Voicebox (Whisper).
+    Note: the very first call may fail while the Whisper model downloads
+    (~1.5 GB); wait a minute and retry.
 
     Args:
         seconds: How long to record, capped at 60.
     """
     client = _get_client()
     try:
-        audio_path = record(min(seconds, 60.0))
-        payload = await client.transcribe(audio_path)
-        return str(payload.get("text", ""))
-    except (MicError, VoiceboxError) as exc:
+        audio_path = await asyncio.to_thread(record, min(max(seconds, 1.0), 60.0))
+    except MicError as exc:
         raise RuntimeError(str(exc)) from exc
+    try:
+        payload = await client.transcribe(audio_path)
+    except VoiceboxError as exc:
+        raise RuntimeError(str(exc)) from exc
+    finally:
+        Path(audio_path).unlink(missing_ok=True)
+    return str(payload.get("text", ""))
 
 
 @mcp.tool

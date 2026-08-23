@@ -22,6 +22,9 @@ or patch upstream; everything we own lives in this repo.
 - **Ports.** The podman runtime maps host `17600 -> 17493`; that is the live
   path and the default in configs/scripts. Native `17493` only applies when
   running a source/desktop build.
+- **GPU.** Stock image ships torch cu130; GPU comes from CDI passthrough in
+  `docker/ports-override.yml` (`nvidia.com/gpu=all`). No custom image exists
+  or is needed. Verify: `podman exec voicebox python -c "import torch; print(torch.cuda.is_available())"`.
 - **Headless tradeoffs.** No speaking pill, no dictation, no direct speaker
   playback. Generated audio lands in `voicebox-upstream/output/` (bind mount);
   play host-side with `scripts/play-latest.sh`. Per-client voice bindings are
@@ -55,7 +58,7 @@ or patch upstream; everything we own lives in this repo.
 
 # Wrapper MCP server
 uv sync --directory services/voice-mcp
-uv run --env-file .env --directory services/voice-mcp voice-mcp   # stdio MCP
+uv run --env-file ../../.env --directory services/voice-mcp voice-mcp   # stdio MCP
 
 # Verification
 ./scripts/smoke-test.sh         # REST path: profiles -> speak -> SSE status
@@ -70,3 +73,6 @@ uv run --directory services/voice-mcp pytest -q   # unit tests
 - Secrets/config via `.env` (gitignored); `.env.example` documents every var.
 - Branch naming follows global conventions (`feat/`, `fix/`, `chore/`).
 - Phase status lives in README.md; keep it current when a phase completes.
+- After an upstream `voicebox.speak` completes, play the audio host-side with
+  `./scripts/play-latest.sh` - the container has no speakers (our wrapper's
+  `say()` plays automatically once registered).

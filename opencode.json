@@ -8,6 +8,19 @@
         "X-Voicebox-Client-Id": "opencode"
       },
       "enabled": true
+    },
+    "voice-agent": {
+      "type": "local",
+      "command": [
+        "/home/bigbrotha/.local/bin/uv",
+        "run",
+        "--env-file",
+        "/home/bigbrotha/Projects/ai/voicebox/.env",
+        "--directory",
+        "/home/bigbrotha/Projects/ai/voicebox/services/voice-mcp",
+        "voice-mcp"
+      ],
+      "enabled": true
     }
   }
 }

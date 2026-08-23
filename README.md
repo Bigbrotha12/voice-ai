@@ -28,9 +28,9 @@ Cursor) can use them. A later phase adds telephony so agents can hold real phone
 
 ## Phases
 
-- [x] **Phase 1** — Voicebox runtime up (podman container, CPU-first; CUDA overlay pending)
+- [x] **Phase 1** — Voicebox runtime up (podman container, CUDA via CDI passthrough)
 - [x] **Phase 2** — Upstream MCP wired into opencode; speak verified end-to-end
-- [ ] **Phase 3** — Wrapper MCP server (`services/voice-mcp`): `say`, `voices`, `listen`
+- [x] **Phase 3** — Wrapper MCP server live: `say` (auto-play), `voices`, `listen` (mic → Whisper)
 - [ ] **Phase 4** — Telephony spike: Pipecat bot + LiveKit SIP + Telnyx trunk
 - [ ] **Phase 5** — Conversation dynamics: semantic end-of-turn, barge-in tuning, pre-rendered backchannels, speculative reply pipelining
 
@@ -41,8 +41,10 @@ for the Phase 4 decision record.
 
 ```
 .
+├── opencode.json         # registers upstream MCP + our wrapper for opencode
 ├── services/voice-mcp/   # Wrapper MCP server (FastMCP, Python)
-├── scripts/              # smoke-test.sh, mcp-inspect.sh
+├── docker/               # scoped podman registries config + compose port override
+├── scripts/              # upstream-up.sh, smoke-test.sh, mcp-inspect.sh, play-latest.sh
 ├── docs/                 # setup and operations notes
 ├── telephony/            # Phase 4 research and future code
 └── AGENTS.md             # conventions for agent sessions in this repo

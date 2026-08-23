@@ -10,3 +10,9 @@ services:
     # write ./output (owned by your host user). Container root == your own
     # unprivileged account here - no real privilege escalation.
     user: "0:0"
+    devices:
+      # GPU passthrough via CDI (nvidia-container-toolkit already installed;
+      # spec generated at /etc/cdi/nvidia.yaml). The stock image ships
+      # torch cu130 - no rebuild needed, it just can't see the GPU without
+      # this.
+      - "nvidia.com/gpu=all"

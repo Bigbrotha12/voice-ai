@@ -177,9 +177,35 @@ Revisit triggers:
 3. **Ops weight.** Self-hosted LiveKit adds infra. Managed LiveKit Cloud exists
    as a fallback if self-hosting stalls.
 
+## Measured TTS latency (2026-08-23, RTX 4060 Ti, GPU, warm models)
+
+Via `scripts/tts-benchmark.py` against `POST /generate/stream`
+(total time to full wav in memory; TTFB == total since synthesis is batch):
+
+| engine | short (~50 chars) | medium (~240 chars) | verdict for live turns |
+|---|---|---|---|
+| kokoro | 0.04s | 0.15s | realtime-grade - default live-turn engine |
+| luxtts | 0.11s | 0.19s | realtime-grade |
+| chatterbox_turbo | 0.78s | 2.31s | turn-boundary use only (expressive tags) |
+| qwen | n/a | n/a | BLOCKED: triton JIT needs a C compiler absent from the runtime image; revisit only if delivery control becomes a hard requirement |
+
+This retires open question 3 and downgrades Known risk 1 substantially:
+with kokoro at 40ms, Voicebox itself can serve live turns - standalone
+Kokoro is no longer the assumed fallback.
+
 ## Open questions (answer before starting Phase 4)
 
 - Inbound or outbound first? (Outbound is simpler; inbound needs number provisioning.)
 - Which country for the number? Affects pricing/regulation.
-- Latency budget for "acceptable conversation"? Measure Voicebox TTS p50/p95 per engine early.
+- ~~Latency budget for "acceptable conversation"?~~ MEASURED 2026-08 (see table above): kokoro/luxtts are realtime-grade on GPU. Remaining budget question is end-to-end (VAD+LLM), not TTS.
 - Trunk budget cap for the learning phase?
+
+## Phase 4 groundwork (2026-08-23)
+
+**TTS adapter complete**: `telephony/pipecat-bot/src/voicebot/tts.py` — `VoiceboxTTSService` wraps `POST /generate/stream`, parses WAV header, yields raw PCM frames. 8 unit tests pass. See `telephony/pipecat-bot/README.md` for usage.
+
+**Remaining Phase 4 work**:
+- STT adapter (wrap Voicebox `/transcribe` or use faster-whisper directly)
+- Transport integration (Daily/LiveKit/LiveKit SIP)
+- LLM integration (any Pipecat-compatible service)
+- End-to-end agent loop with VAD + turn-taking

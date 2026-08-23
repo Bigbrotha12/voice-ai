@@ -17,6 +17,12 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 UPSTREAM_DIR="${VOICEBOX_UPSTREAM_DIR:-$HOME/Projects/ai/voicebox-upstream}"
 export CONTAINERS_REGISTRIES_CONF="$REPO_ROOT/docker/registries.conf"
 
+[ -d "$UPSTREAM_DIR" ] || {
+  echo "Upstream checkout not found at $UPSTREAM_DIR" >&2
+  echo "Clone it first (docs/setup.md step 1), or set VOICEBOX_UPSTREAM_DIR." >&2
+  exit 1
+}
+
 compose() {
   cd "$UPSTREAM_DIR"
   podman-compose \
