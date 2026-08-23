@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Voicebot Test Client</title>
   <script type="module">
-    import { Room, RemoteParticipant, RoomEvent, Track } from 'https://cdn.jsdelivr.net/npm/livekit-client@2.5.0/+esm';
+    import { Room, RemoteParticipant, RoomEvent, Track, createLocalAudioTrack } from 'https://cdn.jsdelivr.net/npm/livekit-client@2.5.0/+esm';
   </script>
   <style>
     * { box-sizing: border-box; font-family: system-ui, sans-serif; }
@@ -194,7 +194,7 @@
         log('Connected to room', 'info');
 
         // Publish microphone
-        localAudioTrack = await Room.createLocalAudioTrack({
+        localAudioTrack = await createLocalAudioTrack({
           name: 'microphone',
           // Auto-gain control, echo cancellation, noise suppression
         });
