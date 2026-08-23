@@ -1,6 +1,6 @@
-# voicebot — Pipecat adapter for Voicebox TTS
+# voicebot — Pipecat voice agent using Voicebox TTS/STT
 
-A minimal Pipecat service that wraps Voicebox's REST API (`POST /generate/stream`) as a TTS source, enabling Voicebox's cloned/preset voices inside Pipecat voice-agent pipelines.
+A complete Pipecat voice agent with Voicebox as the TTS/STT backend, LiveKit for real-time transport, and Ollama for local LLM inference.
 
 ## What works
 
@@ -17,42 +17,73 @@ A minimal Pipecat service that wraps Voicebox's REST API (`POST /generate/stream
   - 5 unit tests (transcription, empty text, error paths)
   - Note: batch-oriented, not streaming - suitable for dictation-style use cases
 
-## What's needed next
+- **`agent.py`** — Complete voice agent wiring:
+  - LiveKit transport for real-time audio
+  - Voicebox TTS + STT
+  - Ollama local LLM
+  - Silero VAD (built into Pipecat)
 
-This is a **TTS + STT adapter**. To run a full voice agent you need:
+## Quick start
 
-1. **Transport** — Daily, LiveKit, or self-hosted LiveKit SIP (see `telephony/RESEARCH.md`)
-2. **LLM** — any Pipecat-compatible LLM service (OpenAI, Anthropic, local)
-3. **VAD** — Pipecat's built-in Silero VAD (included in `[silero]` extra)
-4. **End-to-end agent loop** — wire VAD → STT → LLM → TTS → transport
+### Prerequisites
 
-## Usage
+1. **Voicebox** running on `http://127.0.0.1:17600` (GPU-enabled podman container)
+2. **LiveKit server** — local dev server or LiveKit Cloud
+3. **Ollama** running locally with a model pulled
 
-```python
-from pipecat.pipeline import Pipeline
-from pipecat.services.openai.llm import OpenAILLMService
-from voicebot.tts import VoiceboxTTSService
-from voicebot.stt import VoiceboxSTTService
+### Start dependencies
 
-tts = VoiceboxTTSService(
-    base_url="http://127.0.0.1:17600",
-    profile_id="your-profile-id",
-    engine="kokoro",
-)
+```bash
+# Voicebox (from repo root)
+./scripts/upstream-up.sh
 
-stt = VoiceboxSTTService(
-    base_url="http://127.0.0.1:17600",
-    model="turbo",
-)
+# Ollama - pull a model
+ollama pull llama3.2
 
-pipeline = Pipeline([
-    # ... VAD, stt, LLM, tts, transport
-])
+# LiveKit local dev server (Docker)
+docker run --rm -p 7880:7880 -p 7881:7881 -p 7882:7882/udp \
+  livekit/livekit-server --dev --bind 0.0.0.0
 ```
 
-## Latency
+### Configure environment
 
-Measured on RTX 4060 Ti (see `telephony/RESEARCH.md`):
+```bash
+export VOICEBOX_URL=http://127.0.0.1:17600
+export VOICEBOX_PROFILE_ID=<your-profile-id>  # from voicebox.voices()
+export VOICEBOX_ENGINE=kokoro
+export LIVEKIT_URL=ws://localhost:7880
+export LIVEKIT_API_KEY=devkey
+export LIVEKIT_API_SECRET=secret
+export LIVEKIT_ROOM=voicebot-room
+export OLLAMA_MODEL=llama3.2
+```
+
+### Run the agent
+
+```bash
+cd telephony/pipecat-bot
+uv sync
+uv run voicebot
+```
+
+The agent joins the LiveKit room and waits for participants. Connect a LiveKit client (web, mobile, SIP) to talk to it.
+
+## Architecture
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│  LiveKit    │────▶│ Voicebox    │────▶│   Ollama    │────▶│ Voicebox    │
+│  Transport  │     │   STT       │     │   LLM       │     │   TTS       │
+│  (audio)    │     │ (Whisper)   │     │ (llama3.2)  │     │ (kokoro)    │
+└─────────────┘     └─────────────┘     └─────────────┘     └─────────────┘
+       ▲                                                                   │
+       └───────────────────────────────────────────────────────────────────┘
+                              LiveKit Transport
+```
+
+## Latency (RTX 4060 Ti)
+
+Measured in `telephony/RESEARCH.md`:
 - **kokoro**: 40ms (short) / 150ms (medium) — realtime-grade
 - **luxtts**: 110ms / 190ms
 - **chatterbox_turbo**: 780ms / 2.3s — expressive but not live-turn viable
@@ -66,3 +97,10 @@ cd telephony/pipecat-bot
 uv sync
 uv run pytest
 ```
+
+## Next steps
+
+- Replace batch STT with streaming (faster-whisper or Deepgram) for true real-time
+- Add LiveKit SIP + Telnyx trunk for telephony
+- Add conversation memory / context management
+- Add function calling / tool use via Ollama

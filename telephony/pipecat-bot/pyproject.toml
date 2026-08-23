@@ -1,12 +1,16 @@
 [project]
 name = "voicebot"
 version = "0.1.0"
-description = "Pipecat voice agent using Voicebox as TTS (Phase 4 groundwork)"
+description = "Pipecat voice agent using Voicebox as TTS/STT (Phase 4)"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    "pipecat-ai[silero]>=0.0.70",
+    "pipecat-ai[silero,livekit]>=0.0.70",
     "httpx>=0.27",
+    "livekit-api>=1.2",
 ]
+
+[project.scripts]
+voicebot = "voicebot.agent:run"
 
 [dependency-groups]
 dev = [
