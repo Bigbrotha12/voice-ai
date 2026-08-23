@@ -19,10 +19,20 @@ def make_service(handler) -> VoiceboxSTTService:
 
 
 async def collect(service: VoiceboxSTTService, audio: bytes = b"fake-audio") -> list:
-    return [f async for f in service.run_stt(audio, context_id="ctx-1")]
+    return [f async for f in service.run_stt(audio)]
 
 
 class TestRunStt:
+    def test_run_stt_matches_pipecat_contract(self):
+        """run_stt(audio) - Pipecat calls it with only the audio arg."""
+        import inspect
+
+        from pipecat.services.stt_service import STTService
+
+        params = list(inspect.signature(VoiceboxSTTService.run_stt).parameters.values())
+        base_params = list(inspect.signature(STTService.run_stt).parameters.values())
+        assert [p.name for p in params[1:]] == [p.name for p in base_params[1:]]
+
     @pytest.mark.asyncio
     async def test_yields_transcription_frame(self):
         def handler(request):

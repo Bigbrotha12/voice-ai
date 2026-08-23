@@ -42,7 +42,7 @@ class VoiceboxSTTService(STTService):
             base_url=self._base_url, timeout=httpx.Timeout(120.0)
         )
 
-    async def run_stt(self, audio: bytes, context_id: str) -> AsyncGenerator[Frame | None, None]:
+    async def run_stt(self, audio: bytes) -> AsyncGenerator[Frame | None, None]:
         """Transcribe audio bytes via Voicebox's /transcribe endpoint.
 
         Note: This is batch transcription, not streaming. The audio parameter
