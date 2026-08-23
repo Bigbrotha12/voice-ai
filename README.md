@@ -31,7 +31,7 @@ Cursor) can use them. A later phase adds telephony so agents can hold real phone
 - [x] **Phase 1** — Voicebox runtime up (podman container, CUDA via CDI passthrough)
 - [x] **Phase 2** — Upstream MCP wired into opencode; speak verified end-to-end
 - [x] **Phase 3** — Wrapper MCP server live: `say` (auto-play), `voices`, `listen` (mic → Whisper)
-- [ ] **Phase 4** — Telephony: Pipecat adapters (TTS + STT complete), transport/LLM/agent loop pending
+- [x] **Phase 4** — Telephony agent: LiveKit transport + Voicebox TTS/STT + Ollama LLM (`telephony/pipecat-bot/`)
 - [ ] **Phase 5** — Conversation dynamics: semantic end-of-turn, barge-in tuning, pre-rendered backchannels, speculative reply pipelining
 
 See `docs/setup.md` for bring-up instructions and `telephony/RESEARCH.md`
