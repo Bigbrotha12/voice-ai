@@ -20,6 +20,7 @@ class Settings:
     say_timeout_seconds: float
     output_dir: Path
     player: str
+    warmup_ms: float
 
 
 def _float_env(name: str, default: str) -> float:
@@ -40,4 +41,5 @@ def load_settings() -> Settings:
             os.environ.get("VOICEBOX_OUTPUT_DIR", DEFAULT_OUTPUT_DIR)
         ).expanduser(),
         player=os.environ.get("VOICEBOX_PLAYER", "auto"),
+        warmup_ms=_float_env("VOICEBOX_WARMUP_MS", "250"),
     )
