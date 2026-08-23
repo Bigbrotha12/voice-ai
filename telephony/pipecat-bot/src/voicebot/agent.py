@@ -12,7 +12,7 @@ Env vars:
 - LIVEKIT_URL: ws://localhost:7880 (or wss:// for cloud)
 - LIVEKIT_API_KEY, LIVEKIT_API_SECRET: for token generation
 - LIVEKIT_ROOM: room name to join
-- OLLAMA_MODEL: e.g., "llama3.2" or "mistral"
+- OLLAMA_MODEL: e.g., "qwen2.5-3b-instruct" (llama.cpp server default)
 - VOICEBOX_URL: http://127.0.0.1:17600
 - VOICEBOX_PROFILE_ID: voice profile ID
 - VOICEBOX_ENGINE: kokoro/luxtts/chatterbox_turbo/etc
@@ -43,8 +43,8 @@ LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY", "devkey")
 LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET", "secret")
 LIVEKIT_ROOM = os.getenv("LIVEKIT_ROOM", "voicebot-room")
 
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5-3b-instruct")
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:19091/v1")
 
 VOICEBOX_URL = os.getenv("VOICEBOX_URL", "http://127.0.0.1:17600")
 VOICEBOX_PROFILE_ID = os.getenv("VOICEBOX_PROFILE_ID")

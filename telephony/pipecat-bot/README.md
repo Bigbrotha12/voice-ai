@@ -55,7 +55,7 @@ export LIVEKIT_URL=ws://localhost:7880
 export LIVEKIT_API_KEY=devkey
 export LIVEKIT_API_SECRET=secret
 export LIVEKIT_ROOM=voicebot-room
-export OLLAMA_MODEL=llama3.2
+export OLLAMA_MODEL=qwen2.5-3b-instruct
 ```
 
 ### Run the agent
