@@ -28,8 +28,8 @@ Cursor) can use them. A later phase adds telephony so agents can hold real phone
 
 ## Phases
 
-- [ ] **Phase 1** — Voicebox runtime up (source build with CUDA on Linux/NVIDIA)
-- [ ] **Phase 2** — Wire upstream's built-in MCP into opencode; verify end-to-end
+- [x] **Phase 1** — Voicebox runtime up (podman container, CPU-first; CUDA overlay pending)
+- [x] **Phase 2** — Upstream MCP wired into opencode; speak verified end-to-end
 - [ ] **Phase 3** — Wrapper MCP server (`services/voice-mcp`): `say`, `voices`, `listen`
 - [ ] **Phase 4** — Telephony spike: Pipecat bot + LiveKit SIP + Telnyx trunk
 - [ ] **Phase 5** — Conversation dynamics: semantic end-of-turn, barge-in tuning, pre-rendered backchannels, speculative reply pipelining
