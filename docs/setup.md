@@ -5,8 +5,8 @@ Bringing the stack up in order. Phase 1 is the only heavyweight step.
 ## 1. Voicebox runtime (upstream, podman container)
 
 Primary path: headless container from a pinned upstream checkout. No host
-toolchain needed beyond podman (+ podman-compose). GPU comes later via a
-CUDA overlay we own; start CPU-only - kokoro/luxtts engines are CPU-fast.
+toolchain needed beyond podman (+ podman-compose). GPU comes via CDI
+passthrough (see below) - the stock image ships CUDA-enabled torch.
 
 ```sh
 git clone https://github.com/jamiepine/voicebox.git ~/Projects/ai/voicebox-upstream
@@ -40,12 +40,17 @@ Container facts that matter:
 - Models download lazily on first use into named volumes (persist across
   restarts); `/transcribe` answers HTTP 202 while Whisper downloads.
 
-### GPU overlay (follow-up, not yet built)
+### GPU
 
-The stock image installs CPU-only PyTorch. When needed, add `docker/Dockerfile.cuda`
-(replicating upstream's pip stage with `--extra-index-url .../cu126`) plus a
-compose override passing CDI device `nvidia.com/gpu=all` - nvidia-container-toolkit
-and `/etc/cdi/nvidia.yaml` already exist on this machine.
+No custom image needed: the stock build ships torch **cu130**. GPU access is
+just CDI passthrough, already wired in `docker/ports-override.yml`
+(`nvidia.com/gpu=all`; requires nvidia-container-toolkit + `/etc/cdi/nvidia.yaml`).
+Verify with:
+
+```sh
+podman exec voicebox python -c "import torch; print(torch.cuda.is_available())"
+curl -s http://127.0.0.1:17600/health | grep -o '"gpu_available":[a-z]*'
+```
 
 ### Alternative: source/desktop build
 

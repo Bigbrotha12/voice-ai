@@ -22,6 +22,9 @@ or patch upstream; everything we own lives in this repo.
 - **Ports.** The podman runtime maps host `17600 -> 17493`; that is the live
   path and the default in configs/scripts. Native `17493` only applies when
   running a source/desktop build.
+- **GPU.** Stock image ships torch cu130; GPU comes from CDI passthrough in
+  `docker/ports-override.yml` (`nvidia.com/gpu=all`). No custom image exists
+  or is needed. Verify: `podman exec voicebox python -c "import torch; print(torch.cuda.is_available())"`.
 - **Headless tradeoffs.** No speaking pill, no dictation, no direct speaker
   playback. Generated audio lands in `voicebox-upstream/output/` (bind mount);
   play host-side with `scripts/play-latest.sh`. Per-client voice bindings are

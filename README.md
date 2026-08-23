@@ -28,7 +28,7 @@ Cursor) can use them. A later phase adds telephony so agents can hold real phone
 
 ## Phases
 
-- [x] **Phase 1** — Voicebox runtime up (podman container, CPU-first; CUDA overlay pending)
+- [x] **Phase 1** — Voicebox runtime up (podman container, CUDA via CDI passthrough)
 - [x] **Phase 2** — Upstream MCP wired into opencode; speak verified end-to-end
 - [x] **Phase 3** — Wrapper MCP server live: `say` (auto-play), `voices`, `listen` (mic → Whisper)
 - [ ] **Phase 4** — Telephony spike: Pipecat bot + LiveKit SIP + Telnyx trunk
