@@ -1,0 +1,7 @@
+# Replaces the ports list from upstream's docker-compose.yml (v0.5.0 still
+# binds host 17493). Keeps our repo-wide convention: containerized runtime
+# lives at host 17600, loopback only. Loaded by scripts/upstream-up.sh.
+services:
+  voicebox:
+    ports: !override
+      - "127.0.0.1:17600:17493"
