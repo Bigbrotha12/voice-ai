@@ -92,8 +92,10 @@ confusing double-voice behavior.
 ```sh
 uv sync --directory services/voice-mcp
 cp .env.example .env            # adjust VOICEBOX_URL if using docker port 17600
-uv run --env-file .env --directory services/voice-mcp voice-mcp
+uv run --env-file ../../.env --directory services/voice-mcp voice-mcp
 ```
+
+Note: uv resolves `--env-file` relative to `--directory`, hence `../../.env`.
 
 Inspect tools without an agent host:
 
@@ -115,6 +117,8 @@ REST-level check independent of MCP:
 | `VOICEBOX_CLIENT_ID` | `voice-mcp` | Client identity for per-client bindings |
 | `DEFAULT_PROFILE` | unset | Fallback voice when callers omit `profile` |
 | `SAY_TIMEOUT_SECONDS` | `120` | Max seconds to watch the SSE status stream |
+| `VOICEBOX_OUTPUT_DIR` | `~/Projects/ai/voicebox-upstream/output` | Where generated wavs land |
+| `VOICEBOX_PLAYER` | `auto` | Host player: `auto`, `none`, or ffplay/paplay/mpv |
 
 ## API shapes (verified against upstream v0.5.0 source)
 

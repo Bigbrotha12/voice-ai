@@ -55,7 +55,7 @@ or patch upstream; everything we own lives in this repo.
 
 # Wrapper MCP server
 uv sync --directory services/voice-mcp
-uv run --env-file .env --directory services/voice-mcp voice-mcp   # stdio MCP
+uv run --env-file ../../.env --directory services/voice-mcp voice-mcp   # stdio MCP
 
 # Verification
 ./scripts/smoke-test.sh         # REST path: profiles -> speak -> SSE status
@@ -70,3 +70,6 @@ uv run --directory services/voice-mcp pytest -q   # unit tests
 - Secrets/config via `.env` (gitignored); `.env.example` documents every var.
 - Branch naming follows global conventions (`feat/`, `fix/`, `chore/`).
 - Phase status lives in README.md; keep it current when a phase completes.
+- After an upstream `voicebox.speak` completes, play the audio host-side with
+  `./scripts/play-latest.sh` - the container has no speakers (our wrapper's
+  `say()` plays automatically once registered).
