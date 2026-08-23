@@ -1,0 +1,13 @@
+# Loaded AFTER ports-override.yml when scripts/upstream-up.sh runs with
+# --cpu. Same image/service otherwise: port 17600, output bind mount,
+# persistent model cache all inherited from ports-override.yml.
+#
+# devices: !override [] drops the CDI GPU passthrough, which makes torch
+# fall back to CPU at startup (/health reports backend_variant "cpu").
+services:
+  voicebox:
+    devices: !override []
+    environment:
+      # Without this librosa/numba JIT caching 500s every /transcribe
+      # (mirrors upstream compose, which sets the same var).
+      - NUMBA_CACHE_DIR=/tmp/numba_cache

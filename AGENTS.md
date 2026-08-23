@@ -58,6 +58,9 @@ or patch upstream; everything we own lives in this repo.
 ./scripts/upstream-up.sh        # build + start detached (first build: several minutes)
 ./scripts/upstream-up.sh logs   # watch startup; /health when ready
 ./scripts/upstream-up.sh down
+./scripts/upstream-up.sh --cpu  # CPU-only runtime (frees ~10GB VRAM; use
+                                # whisper base model - small/turbo crash on
+                                # CPU upstream; kokoro RTF ~0.17 measured)
 
 # Wrapper MCP server
 uv sync --directory services/voice-mcp

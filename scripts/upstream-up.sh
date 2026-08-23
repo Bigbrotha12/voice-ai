@@ -5,12 +5,20 @@
 #                                  resolves short base-image names without
 #                                  a TTY prompt (no global podman changes)
 #   docker/ports-override.yml   -> remaps host port 17493 -> 17600 (v0.5.0
-#                                  compose predates upstream's own remap)
+#                                  compose predates upstream's own remap),
+#                                  rootless bind-mount fixes, persistent
+#                                  model cache via HF_HOME, SELinux fix
+#   docker/cpu-override.yml     -> (--cpu only) drops CDI GPU passthrough;
+#                                  torch falls back to CPU at startup
 #
 # Usage:
-#   ./scripts/upstream-up.sh            # build + start detached
-#   ./scripts/upstream-up.sh logs       # follow startup logs
-#   ./scripts/upstream-up.sh down       # stop and remove
+#   ./scripts/upstream-up.sh              # build + start detached (GPU)
+#   ./scripts/upstream-up.sh --cpu        # same, but CPU-only runtime
+#   ./scripts/upstream-up.sh [--cpu] logs # follow startup logs
+#   ./scripts/upstream-up.sh [--cpu] down # stop and remove
+#
+# Mode switches recreate the container; profiles/generations/model caches
+# live in named volumes and survive the flip either direction.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -23,15 +31,24 @@ export CONTAINERS_REGISTRIES_CONF="$REPO_ROOT/docker/registries.conf"
   exit 1
 }
 
+CPU_MODE=0
+ARGS=()
+for arg in "$@"; do
+  case "$arg" in
+    --cpu) CPU_MODE=1 ;;
+    *) ARGS+=("$arg") ;;
+  esac
+done
+ACTION="${ARGS[0]:-up}"
+
 compose() {
   cd "$UPSTREAM_DIR"
-  podman-compose \
-    -f "$UPSTREAM_DIR/docker-compose.yml" \
-    -f "$REPO_ROOT/docker/ports-override.yml" \
-    "$@"
+  local files=(-f "$UPSTREAM_DIR/docker-compose.yml" -f "$REPO_ROOT/docker/ports-override.yml")
+  [ "$CPU_MODE" = 1 ] && files+=(-f "$REPO_ROOT/docker/cpu-override.yml")
+  podman-compose "${files[@]}" "$@"
 }
 
-case "${1:-up}" in
+case "$ACTION" in
   up)
     compose up -d --build
     ;;
@@ -42,7 +59,7 @@ case "${1:-up}" in
     compose down
     ;;
   *)
-    echo "Unknown command: $1 (use up | logs | down)" >&2
+    echo "Unknown command: $ACTION (use up | logs | down; optional --cpu flag)" >&2
     exit 1
     ;;
 esac
