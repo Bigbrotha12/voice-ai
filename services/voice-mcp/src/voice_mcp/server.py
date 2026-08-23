@@ -10,6 +10,7 @@ Tools:
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from fastmcp import FastMCP
@@ -109,21 +110,24 @@ async def say(
 
 @mcp.tool
 async def listen(seconds: float = 5.0) -> str:
-    """Record from the microphone and return the transcript.
+    """Record from this machine's microphone and return the transcript.
 
-    NOT IMPLEMENTED yet - currently always fails. Will record from the default
-    input device and return the transcribed text.
+    Records for `seconds`, then transcribes via Voicebox (Whisper).
+    Note: the very first call may fail while the Whisper model downloads
+    (~1.5 GB); wait a minute and retry.
 
     Args:
         seconds: How long to record, capped at 60.
     """
     client = _get_client()
+    audio_path = record(min(max(seconds, 1.0), 60.0))
     try:
-        audio_path = record(min(seconds, 60.0))
         payload = await client.transcribe(audio_path)
-        return str(payload.get("text", ""))
-    except (MicError, VoiceboxError) as exc:
+    except (VoiceboxError,) as exc:
         raise RuntimeError(str(exc)) from exc
+    finally:
+        Path(audio_path).unlink(missing_ok=True)
+    return str(payload.get("text", ""))
 
 
 @mcp.tool
