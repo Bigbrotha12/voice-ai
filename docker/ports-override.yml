@@ -10,9 +10,25 @@ services:
     # write ./output (owned by your host user). Container root == your own
     # unprivileged account here - no real privilege escalation.
     user: "0:0"
+    environment:
+      # Running as root makes ~/.cache resolve to /root/.cache, which is the
+      # ephemeral container layer -> Whisper models (1.9G) vanished on every
+      # recreate while kokoro survived only because upstream volumes
+      # /home/voicebox/.cache/huggingface. Pin HF_HOME at that volume so all
+      # model caches persist across down/up.
+      - HF_HOME=/home/voicebox/.cache/huggingface
     devices:
       # GPU passthrough via CDI (nvidia-container-toolkit already installed;
       # spec generated at /etc/cdi/nvidia.yaml). The stock image ships
       # torch cu130 - no rebuild needed, it just can't see the GPU without
       # this.
       - "nvidia.com/gpu=all"
+    security_opt:
+      # SELinux is Enforcing on this host; after the 580.178.04 driver
+      # update (2026-08-22) freshly started containers get EPERM on
+      # /dev/nvidia* -> cuInit returns 100 -> torch falls back to CPU-less.
+      # label=disable restores device access (same tradeoff llama.cpp
+      # container uses). Stack is loopback-only, so exposure stays local.
+      # NOTE: plain list (no !override) - podman-compose chokes on the tag
+      # here, and upstream sets no security_opt to merge with.
+      - "label=disable"
