@@ -118,7 +118,9 @@ REST-level check independent of MCP:
 | `DEFAULT_PROFILE` | unset | Fallback voice when callers omit `profile` |
 | `SAY_TIMEOUT_SECONDS` | `120` | Max seconds to watch the SSE status stream |
 | `VOICEBOX_OUTPUT_DIR` | `~/Projects/ai/voicebox-upstream/output` | Where generated wavs land |
-| `VOICEBOX_PLAYER` | `auto` | Host player: `auto`, `none`, or ffplay/paplay/mpv |
+| `VOICEBOX_PLAYER` | `auto` | Host player: `auto`, `none`, or paplay/ffplay/mpv |
+| `VOICEBOX_WARMUP_MS` | `250` | Silence burst before playback to wake idle sinks |
+| `VOICEBOX_MIC_DEVICE` | auto-detect | Input source override for `listen()` |
 
 ## API shapes (verified against upstream v0.5.0 source)
 
