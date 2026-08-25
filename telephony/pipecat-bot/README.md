@@ -1,6 +1,6 @@
 # voicebot — Pipecat voice agent using Voicebox TTS/STT
 
-A complete Pipecat voice agent with Voicebox as the TTS/STT backend, LiveKit for real-time transport, and Ollama for local LLM inference.
+A complete Pipecat voice agent with Voicebox as the TTS/STT backend, LiveKit for real-time transport, and llama.cpp for local LLM inference.
 
 ## What works
 
