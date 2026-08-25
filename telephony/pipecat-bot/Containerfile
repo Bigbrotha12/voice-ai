@@ -1,0 +1,36 @@
+# Pipecat voicebot image: in-process faster-whisper STT (GPU via the nvidia
+# wheels in the [gpu] extra + CDI passthrough at runtime), Voicebox TTS over
+# REST, llama.cpp LLM over host.containers.internal. Built by
+# docker/voicebot.yml via scripts/stack-up.sh.
+#
+# The [gpu] extra adds ~2GB of nvidia cublas/cudnn wheels to the venv so the
+# runtime needs no host CUDA userspace; only the kernel driver comes from CDI
+# device passthrough.
+
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS builder
+
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy
+WORKDIR /app
+
+# Dependency layer first for cache reuse across code-only rebuilds.
+COPY pyproject.toml uv.lock ./
+RUN uv sync --extra gpu --frozen --no-install-project --no-dev
+
+COPY src ./src
+RUN uv sync --extra gpu --frozen --no-dev
+
+
+FROM python:3.12-slim-bookworm
+
+RUN groupadd --system voicebot && useradd --system --gid voicebot --create-home voicebot
+WORKDIR /app
+
+COPY --from=builder --chown=voicebot:voicebot /app/.venv /app/.venv
+COPY --from=builder --chown=voicebot:voicebot /app/src /app/src
+
+ENV PATH="/app/.venv/bin:$PATH" \
+    HF_HOME=/home/voicebot/.cache/huggingface
+
+USER voicebot
+CMD ["voicebot"]

@@ -207,6 +207,44 @@ Kokoro is no longer the assumed fallback.
 **STT adapter complete**: `telephony/pipecat-bot/src/voicebot/stt.py` — `VoiceboxSTTService` wraps `POST /transcribe` (batch Whisper transcription). 5 unit tests pass. Note: batch-oriented, not streaming - suitable for dictation-style use cases.
 
 **Remaining Phase 4 work**:
-- Transport integration (Daily/LiveKit/LiveKit SIP)
-- LLM integration (any Pipecat-compatible service)
-- End-to-end agent loop with VAD + turn-taking
+- ~~Transport integration (Daily/LiveKit/LiveKit SIP)~~ done: LiveKit transport
+- ~~LLM integration (any Pipecat-compatible service)~~ done: llama.cpp via OLLamaLLMService
+- ~~End-to-end agent loop with VAD + turn-taking~~ done: see README
+
+## Latency tuning round 1 (2026-08-25)
+
+Adoption-order progress against the "Conversation dynamics" section above:
+
+1. **Baseline streaming chain**: already the pipecat default shape. Done.
+2. **Smart Turn EOU**: adopted. Pipecat 1.7.0 ships smart-turn v3.2 as a
+   *bundled* ONNX model and makes it the default user-turn stop strategy
+   (`default_user_turn_stop_strategies()`). Pinned explicitly in
+   `agent.py` so the dependency stays visible.
+3. **Preemptive generation**: deferred - no framework support in pipecat
+   1.7.0 (LiveKit Agents has it; pipecat does not). Requires custom
+   partial-transcript -> LLM restart plumbing. Revisit if turn latency is
+   still above budget after measuring with the current stack.
+4. **Backchannel bank + trigger**: not started (Phase 5).
+5. **Speech-to-speech**: still deferred per triggers above.
+
+**STT moved in-process (2026-08-25)**. The batch `/transcribe` path put full
+upload + decode latency on the turn critical path, and Smart Turn's stop
+strategy waits for the final transcript before firing - so STT speed gates
+end-of-turn. Default is now pipecat's `WhisperSTTService` (faster-whisper /
+CTranslate2) running inside the bot process, GPU via optional nvidia wheels
+(preloaded through ctypes since CTranslate2 dlopens them by soname). The
+Voicebox batch adapter remains selectable via `VOICEBOT_STT_PROVIDER=voicebox`
+(useful when VRAM is tight or for CPU-only Voicebox runtimes - note upstream
+whisper small/turbo crash on `--cpu`; use `base` there).
+
+**Warm paths**: `scripts/warmup.sh` warms kokoro + whisper + llama.cpp after
+bring-up so first turns don't pay model cold-start.
+
+### llama.cpp server flags (recommended)
+
+`llama-small` (the bot's endpoint, 19091) runs CPU-resident (`-ngl 0`) by
+design - it coexists with voicebox/14B on the GPU without eviction logic.
+For that container the useful additions are `--jinja`, `--mlock`, and
+`--cache-type-k q8_0 --cache-type-v q8_0`; flash-attn only applies if a
+model is moved onto the GPU (`-ngl > 0`). Verify any flag actually engaged
+in server startup logs; llama.cpp falls back silently in some cases.

@@ -4,9 +4,18 @@ version = "0.1.0"
 description = "Pipecat voice agent using Voicebox as TTS/STT (Phase 4)"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    "pipecat-ai[silero,livekit]~=1.7.0",
+    "pipecat-ai[silero,livekit,whisper]~=1.7.0",
     "httpx>=0.27",
     "livekit-api>=1.2",
+]
+
+[project.optional-dependencies]
+# CUDA userspace libs for faster-whisper GPU inference (CTranslate2 dlopens
+# them). Optional because CPU-only installs work without the ~1GB download;
+# agent.py preloads them via ctypes when present.
+gpu = [
+    "nvidia-cublas-cu12>=12,<13",
+    "nvidia-cudnn-cu12>=9,<10",
 ]
 
 [project.scripts]

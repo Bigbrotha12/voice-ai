@@ -1,0 +1,27 @@
+# LiveKit media plane as a sibling of the voicebox service. Loaded by
+# scripts/stack-up.sh AFTER the upstream compose + ports-override files.
+#
+# Dev mode (--dev): no auth config, accepts any credentials signed with the
+# well-known devkey/secret pair.
+#
+# Host networking (deliberate): WebRTC needs ICE candidates that clients can
+# actually reach. With bridge networking + loopback-only port publishes, the
+# server advertises its container IP (unreachable from same-host browsers)
+# and filters browser mDNS candidates -> "could not establish pc connection".
+# On the host network it advertises real host interfaces, which both
+# same-host browsers AND containers (via host.containers.internal) reach.
+#
+# TRADEOFF: signaling/media listen on ALL host interfaces, so this dev-mode
+# (unauthenticated) endpoint is LAN-reachable. Acceptable for the homelab
+# dev stack; revisit before any real deployment (firewall scope or
+# configured-keys mode).
+services:
+  livekit:
+    image: docker.io/livekit/livekit-server:v1.13.5
+    container_name: livekit
+    restart: unless-stopped
+    command: --dev --bind 0.0.0.0
+    network_mode: host
+
+# NOTE: no compose `networks:` - the bot reaches LiveKit via
+# ws://host.containers.internal:7880 instead of service DNS (see voicebot.yml).

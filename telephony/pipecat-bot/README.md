@@ -1,6 +1,7 @@
-# voicebot — Pipecat voice agent using Voicebox TTS/STT
+# voicebot — Pipecat voice agent using Voicebox TTS + local Whisper STT
 
-A complete Pipecat voice agent with Voicebox as the TTS/STT backend, LiveKit for real-time transport, and llama.cpp for local LLM inference.
+A complete Pipecat voice agent with Voicebox as the TTS backend, faster-whisper
+(in-process) or Voicebox batch as the STT backend, LiveKit for real-time transport, and llama.cpp for local LLM inference.
 
 ## What works
 
@@ -10,17 +11,28 @@ A complete Pipecat voice agent with Voicebox as the TTS/STT backend, LiveKit for
   - Falls back to `VOICEBOX_URL` / `VOICEBOX_PROFILE_ID` env vars
   - 8 unit tests (header parsing, PCM extraction, error paths)
 
+- **Local faster-whisper STT** (default) — pipecat's `WhisperSTTService`
+  - Runs in-process (no HTTP round trip on the turn critical path)
+  - GPU via the `[gpu]` optional extra (nvidia cublas/cudnn wheels, preloaded
+    by `agent.py`); CPU-only installs work without it
+  - Model/device/compute configurable via `WHISPER_MODEL` / `WHISPER_DEVICE` /
+    `WHISPER_COMPUTE_TYPE`
+
 - **`VoiceboxSTTService`** (`src/voicebot/stt.py`) — Pipecat `STTService` subclass
-  - Batch transcription via Voicebox's `/transcribe` endpoint (Whisper backend)
-  - Configurable: `base_url`, `model` (turbo/base/small/medium/large), `client_id`
-  - Falls back to `VOICEBOX_URL` env var
+  - Batch transcription via Voicebox's `/transcribe` endpoint (Whisper backend);
+    select with `VOICEBOT_STT_PROVIDER=voicebox`, model via `VOICEBOX_STT_MODEL`
+    (**use `base` when the Voicebox runtime runs `--cpu` — small/turbo crash there**)
+  - Configurable: `base_url`, `model`, `client_id`; falls back to `VOICEBOX_URL` env var
   - 5 unit tests (transcription, empty text, error paths)
   - Note: batch-oriented, not streaming - suitable for dictation-style use cases
 
+- **Semantic end-of-turn** — `LocalSmartTurnAnalyzerV3` (pipecat's bundled
+  smart-turn model; pinned explicitly in `agent.py`)
+
 - **`agent.py`** — Complete voice agent wiring:
   - LiveKit transport for real-time audio
-  - Voicebox TTS + STT
-  - Ollama local LLM
+  - Voicebox TTS + pluggable STT (local faster-whisper | Voicebox batch)
+  - llama.cpp LLM (OpenAI-compatible endpoint)
   - Silero VAD (built into Pipecat)
 
 ## Quick start
@@ -29,16 +41,21 @@ A complete Pipecat voice agent with Voicebox as the TTS/STT backend, LiveKit for
 
 1. **Voicebox** running on `http://127.0.0.1:17600` (GPU-enabled podman container)
 2. **LiveKit server** — local dev server or LiveKit Cloud
-3. **llama.cpp server** running on `http://localhost:19091/v1` (Qwen2.5-3B-Instruct)
+3. **LLM**: the queues proxy (OpenAI-compatible facade over RabbitMQ) on
+   `http://localhost:9091/v1` for model.3b. Its worker starts/stops llama.cpp
+   containers on demand - the first token after an idle gap can take ~30s.
+   Direct llama endpoints (19090/19091) are managed by that worker; don't
+   point the bot at them unless you also manage lifecycle yourself.
 
 ### Start dependencies
 
 ```bash
 # Voicebox (from repo root)
-./scripts/upstream-up.sh
+./scripts/stack-up.sh
 
-# llama.cpp server (already running in podman as 'llama-small')
-# If not running: docker run --gpus all -p 19091:8080 ghcr.io/ggml-org/llama.cpp:server-cuda13 -m /models/Qwen2.5-3B-Instruct-Q4_K_M.gguf --host 0.0.0.0 --port 8080
+# LLM: queues proxy + worker (homelab stack, host-native)
+# cd ~/Documents/homelab/podman/queues && podman-compose up -d
+# llama.cpp containers start on demand when tasks arrive.
 
 # LiveKit local dev server (Docker)
 docker run --rm -p 7880:7880 -p 7881:7881 -p 7882:7882/udp \
@@ -55,14 +72,20 @@ export LIVEKIT_URL=ws://localhost:7880
 export LIVEKIT_API_KEY=devkey
 export LIVEKIT_API_SECRET=secret
 export LIVEKIT_ROOM=voicebot-room
-export OLLAMA_MODEL=qwen2.5-3b-instruct
+export OLLAMA_MODEL=Qwen3-8B-Q4_K_M.gguf
+export OLLAMA_BASE_URL=http://localhost:9091/v1   # queues proxy -> model.3b
+
+# STT (optional overrides; defaults to local faster-whisper)
+export VOICEBOT_STT_PROVIDER=local            # local | voicebox
+export WHISPER_MODEL=deepdml/faster-whisper-large-v3-turbo-ct2
+export WHISPER_DEVICE=auto                    # auto | cpu | cuda
 ```
 
 ### Run the agent
 
 ```bash
 cd telephony/pipecat-bot
-uv sync
+uv sync --extra gpu   # drop --extra gpu for CPU-only STT
 uv run voicebot
 ```
 
@@ -84,14 +107,17 @@ Enter the same room name (`voicebot-room`), click **Join Room**, allow microphon
 
 ```
 ┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│  LiveKit    │────▶│ Voicebox    │────▶│   Ollama    │────▶│ Voicebox    │
-│  Transport  │     │   STT       │     │   LLM       │     │   TTS       │
-│  (audio)    │     │ (Whisper)   │     │ (Qwen2.5-3B)│     │ (kokoro)    │
+│  LiveKit    │────▶│ faster-     │────▶│  llama.cpp  │────▶│ Voicebox    │
+│  Transport  │     │ whisper STT │     │ LLM (Qwen)  │     │ TTS (kokoro)│
+│  (audio)    │     │ (in-process)│     │             │     │             │
 └─────────────┘     └─────────────┘     └─────────────┘     └─────────────┘
        ▲                                                                   │
        └───────────────────────────────────────────────────────────────────┘
-                              LiveKit Transport
+                             LiveKit Transport
 ```
+
+STT runs in this process by default; `VOICEBOT_STT_PROVIDER=voicebox` swaps the
+first box for Voicebox's batch `/transcribe` endpoint.
 
 ## Latency (RTX 4060 Ti)
 
@@ -112,7 +138,8 @@ uv run pytest
 
 ## Next steps
 
-- Replace batch STT with streaming (faster-whisper or Deepgram) for true real-time
+- ~~Replace batch STT with streaming (faster-whisper or Deepgram) for true real-time~~ done: in-process faster-whisper is the default
+- Add preemptive generation on partial transcripts (no framework support in pipecat 1.7.0; custom work)
 - Add LiveKit SIP + Telnyx trunk for telephony
 - Add conversation memory / context management
 - Add function calling / tool use via Ollama

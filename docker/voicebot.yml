@@ -1,0 +1,58 @@
+# Pipecat voicebot as a sibling of the voicebox service. Loaded by
+# scripts/stack-up.sh (omit with --host-bot while iterating on agent code).
+#
+# URL wiring: inside voicebox-net the bot talks to siblings by service name.
+# The LLM goes through the queues proxy (host-native homelab stack,
+# ~/Documents/homelab/podman/queues): an OpenAI-compatible HTTP facade over
+# RabbitMQ whose worker owns llama container lifecycle (cold-start + idle
+# shutdown + GPU model swapping). Port 9091 routes to model.3b regardless of
+# which GGUF is resident - the stable interface when models get swapped.
+#
+# GPU: CDI passthrough like ports-override.yml; label=disable for SELinux
+# Enforcing hosts (same cuInit-100 lesson). faster-whisper model downloads
+# land in a named volume so only the first start pays them.
+
+services:
+  voicebot:
+    build:
+      context: ${VOICEBOT_CONTEXT}
+      dockerfile: Containerfile
+    container_name: voicebot
+    restart: unless-stopped
+    depends_on:
+      - voicebox
+      - livekit
+    environment:
+      # Internal wiring (overrides .env values). LiveKit runs host-networked
+      # (see livekit.yml) so the bot reaches it via the host gateway, not
+      # service DNS.
+      - LIVEKIT_URL=ws://host.containers.internal:7880
+      - VOICEBOX_URL=http://voicebox:17493
+      - OLLAMA_BASE_URL=http://host.containers.internal:9091/v1
+      # Tunables from repo .env (sourced by stack-up.sh)
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5-3b-instruct}
+      - VOICEBOX_PROFILE_ID=${VOICEBOX_PROFILE_ID:-}
+      - VOICEBOX_ENGINE=${VOICEBOX_ENGINE:-kokoro}
+      - VOICEBOT_STT_PROVIDER=${VOICEBOT_STT_PROVIDER:-local}
+      - WHISPER_MODEL=${WHISPER_MODEL:-deepdml/faster-whisper-large-v3-turbo-ct2}
+      - WHISPER_DEVICE=${WHISPER_DEVICE:-auto}
+      - WHISPER_COMPUTE_TYPE=${WHISPER_COMPUTE_TYPE:-default}
+    devices:
+      - "nvidia.com/gpu=all"
+    security_opt:
+      - "label=disable"
+    volumes:
+      - voicebot-hf-cache:/home/voicebot/.cache/huggingface
+    networks:
+      - voicebox-net
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 6G
+
+volumes:
+  voicebot-hf-cache:
+
+networks:
+  voicebox-net: {}
