@@ -20,7 +20,7 @@ A complete Pipecat voice agent with Voicebox as the TTS/STT backend, LiveKit for
 - **`agent.py`** — Complete voice agent wiring:
   - LiveKit transport for real-time audio
   - Voicebox TTS + STT
-  - Ollama local LLM
+  - llama.cpp local LLM
   - Silero VAD (built into Pipecat)
 
 ## Quick start
