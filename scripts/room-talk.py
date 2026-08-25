@@ -20,7 +20,17 @@ import sys
 import wave
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "telephony" / "pipecat-bot" / "src"))
+_REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_REPO / "telephony" / "pipecat-bot" / "src"))
+
+# Credentials live in the repo .env (configured-keys LiveKit mode); only
+# fall back to process env so CI/shell overrides still win.
+if not os.environ.get("LIVEKIT_API_KEY") and (_REPO / ".env").exists():
+    for line in (_REPO / ".env").read_text().splitlines():
+        if "=" in line and not line.strip().startswith("#"):
+            k, _, v = line.partition("=")
+            os.environ.setdefault(k.strip(), v.strip())
+
 os.environ.setdefault("LIVEKIT_URL", "ws://localhost:7880")
 
 import numpy as np  # noqa: E402
@@ -31,7 +41,7 @@ RATE = 16000
 
 def token(identity: str = "room-talk") -> str:
     return (
-        api.AccessToken(os.environ.get("LIVEKIT_API_KEY", "devkey"), os.environ.get("LIVEKIT_API_SECRET", "secret"))
+        api.AccessToken(os.environ["LIVEKIT_API_KEY"], os.environ["LIVEKIT_API_SECRET"])
         .with_identity(identity)
         .with_grants(api.VideoGrants(room_join=True, room=os.environ.get("LIVEKIT_ROOM", "voicebot-room")))
         .to_jwt()

@@ -172,10 +172,7 @@ class BackchannelTriggerProcessor(FrameProcessor):
         return len(self._bag)
 
     def _recent_peak(self) -> float:
-        now = time.monotonic_ns() // 1_000_000
-        cutoff = now - 2000
-        while self._recent and self._recent[0][1] < cutoff:
-            self._recent.popleft()
+        # Pruning happens on ingest; this is a pure read.
         return max((r for r, _ in self._recent), default=0.0)
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
@@ -205,7 +202,13 @@ class BackchannelTriggerProcessor(FrameProcessor):
         rms = (self._acc_sq / self._acc_n) ** 0.5
         self._acc_sq = 0
         self._acc_n = 0
-        self._recent.append((rms, time.monotonic_ns() // 1_000_000))
+        now_ms = time.monotonic_ns() // 1_000_000
+        # Prune on ingest (not lazily in _maybe_fire): during bot speech the
+        # fire path early-returns and the ring would grow unboundedly.
+        cutoff = now_ms - 2000
+        while self._recent and self._recent[0][1] < cutoff:
+            self._recent.popleft()
+        self._recent.append((rms, now_ms))
         await self._maybe_fire(rms)
 
     async def _maybe_fire(self, rms: float) -> None:
@@ -242,16 +245,30 @@ class BackchannelTriggerProcessor(FrameProcessor):
 
 
 class BackchannelInjectorProcessor(FrameProcessor):
-    """Converts BackchannelFrame into raw PCM on the output path."""
+    """Converts BackchannelFrame into raw PCM on the output path.
+
+    Drops clips that arrive while the bot is speaking: the LLM reply can
+    start between trigger-fire and playback, and interleaving PCM mid-reply
+    garbles both. One dropped acknowledgment is cheaper than overlap.
+    """
 
     def __init__(self, *, sample_rate: int = 24000, **kwargs):
         super().__init__(**kwargs)
         self._rate = sample_rate
+        self._bot_speaking = False
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
 
-        if isinstance(frame, BackchannelFrame):
+        if isinstance(frame, BotStartedSpeakingFrame):
+            self._bot_speaking = True
+        elif isinstance(frame, BotStoppedSpeakingFrame):
+            self._bot_speaking = False
+        elif isinstance(frame, BackchannelFrame):
+            if self._bot_speaking:
+                logger.debug("backchannel: dropping clip, bot holds the floor")
+                await self.push_frame(frame, direction)
+                return
             try:
                 pcm, rate = load_clip_pcm(frame.path, self._rate)
                 await self.push_frame(TTSAudioRawFrame(pcm, rate, 1))

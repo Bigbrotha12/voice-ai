@@ -93,29 +93,22 @@
     }
 
     async function getToken(roomName, identity) {
-      const header = { alg: 'HS256', typ: 'JWT' };
-      const payload = {
-        iss: 'devkey',
-        sub: identity,
-        nbf: Math.floor(Date.now() / 1000) - 10,
-        exp: Math.floor(Date.now() / 1000) + 3600,
-        video: {
-          room: roomName,
-          roomJoin: true,
-          canPublish: true,
-          canSubscribe: true,
-          canPublishData: true
-        }
-      };
-      const b64url = (bytes) => btoa(String.fromCharCode(...new Uint8Array(bytes)))
-        .replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-      const enc = new TextEncoder();
-      const data = `${b64url(enc.encode(JSON.stringify(header)))}.${b64url(enc.encode(JSON.stringify(payload)))}`;
-      const key = await crypto.subtle.importKey(
-        'raw', enc.encode('secret'), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
-      );
-      const sig = await crypto.subtle.sign('HMAC', key, enc.encode(data));
-      return `${data}.${b64url(sig)}`;
+      // Tokens come from the token-mint service - this page must never see
+      // the LiveKit API secret. Override the mint URL for remote setups.
+      const mintUrl = new URLSearchParams(location.search).get('mint') ||
+        'http://localhost:17602';
+      const resp = await fetch(`${mintUrl}/token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identity, room: roomName, name: identity }),
+      });
+      if (!resp.ok) {
+        const detail = await resp.text().catch(() => '');
+        throw new Error(`token-mint ${resp.status}: ${detail.slice(0, 120)}`);
+      }
+      const data = await resp.json();
+      urlInput.value = data.url;  // server decides the dial address
+      return data.token;
     }
 
     function startMicLevel(track) {

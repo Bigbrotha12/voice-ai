@@ -152,6 +152,19 @@ REST-level check independent of MCP:
 ./scripts/smoke-test.sh         # profiles -> speak -> SSE status -> PASS/FAIL
 ```
 
+## Security model
+
+What's protected and what deliberately isn't (homelab posture):
+
+| Surface | Protection |
+|---|---|
+| Voicebox REST/MCP (`17600`) | loopback-only bind, no auth - never expose |
+| LiveKit signaling/media (`7880-7882`) | configured-keys mode: room joins need JWTs signed with `LIVEKIT_API_KEY/SECRET` (`.env`). Host-networked, so tokens are the gate; add a firewall scope for internet-facing use |
+| Browser/mobile clients | never hold LiveKit secrets - they mint short-lived JWTs from **token-mint** (`127.0.0.1:17602`, optional `TOKEN_MINT_SHARED_SECRET` bearer gate) |
+| voice-mcp HTTP (`17601`) | bearer token via `VOICE_MCP_AUTH_TOKEN`; the bot sends it automatically. REQUIRED when bound beyond loopback |
+| queues proxy (`9090-9092`) | outside this repo's ownership - unauthenticated on LAN by design for k3s LibreChat; consider header auth/firewall there |
+| Secrets | all in gitignored `.env`; rotate with `openssl rand`. The old devkey/secret pair embedded in test-client.html is gone |
+
 ## Environment variables
 
 | Var | Default | Purpose |

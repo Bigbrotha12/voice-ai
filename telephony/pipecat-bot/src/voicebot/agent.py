@@ -64,8 +64,8 @@ from voicebot.stt import VoiceboxSTTService
 from voicebot.tts import VoiceboxTTSService
 
 LIVEKIT_URL = os.getenv("LIVEKIT_URL", "ws://localhost:7880")
-LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY", "devkey")
-LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET", "secret")
+LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY", "")
+LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET", "")
 LIVEKIT_ROOM = os.getenv("LIVEKIT_ROOM", "voicebot-room")
 
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5-3b-instruct")
@@ -97,8 +97,10 @@ BANK_DIR = next(
 )
 
 # Tools: native functions + MCP servers. VOICEBOT_MCP_URLS is a comma-
-# separated list of streamable-HTTP MCP endpoints.
+# separated list of streamable-HTTP endpoints; VOICE_MCP_AUTH_TOKEN is the
+# bearer those endpoints expect (empty = no auth, loopback-only setups).
 MCP_URLS = [u.strip() for u in os.getenv("VOICEBOT_MCP_URLS", "").split(",") if u.strip()]
+MCP_AUTH_TOKEN = os.getenv("VOICE_MCP_AUTH_TOKEN", "")
 
 SYSTEM_INSTRUCTION = (
     "You are a helpful assistant in a live voice conversation. "
@@ -230,7 +232,10 @@ async def setup_tools(llm: OLLamaLLMService) -> tuple[list[FunctionSchema], list
     for url in MCP_URLS:
         from mcp.client.session_group import StreamableHttpParameters
 
-        client = MCPClient(server_params=StreamableHttpParameters(url=url))
+        params = StreamableHttpParameters(url=url)
+        if MCP_AUTH_TOKEN:
+            params.headers = {"Authorization": f"Bearer {MCP_AUTH_TOKEN}"}
+        client = MCPClient(server_params=params)
         try:
             await client.start()
             tools = await client.register_tools(llm)
@@ -239,6 +244,12 @@ async def setup_tools(llm: OLLamaLLMService) -> tuple[list[FunctionSchema], list
             logger.info(f"tools: {len(names)} MCP tools from {url}: {names}")
             clients.append(client)
         except Exception as exc:
+            # Degrade, don't crash - but close the half-open session so we
+            # don't leak the transport.
+            try:
+                await client.close()
+            except Exception:
+                pass
             logger.warning(f"tools: MCP server unreachable, skipping {url}: {exc}")
 
     logger.info(f"tools: {len(schemas)} functions available to LLM")
@@ -379,9 +390,16 @@ async def main():
 
     @transport.event_handler("on_participant_disconnected")
     async def on_participant_disconnected(transport, participant_id: str):
+        # No worker.cancel() here: the idle timeout (1800s) owns teardown.
+        # Cancelling on empty-room races quick reconnects (refresh/ICE
+        # restart) and recycles the container after every goodbye.
         print(f"Participant disconnected: {participant_id}")
-        if not transport.get_participants():
-            await worker.cancel()
+
+    if not LIVEKIT_API_KEY or not LIVEKIT_API_SECRET:
+        raise SystemExit(
+            "LIVEKIT_API_KEY / LIVEKIT_API_SECRET missing - configured-keys "
+            "LiveKit mode has no defaults (see .env.example)"
+        )
 
     print(f"Voice agent joining '{LIVEKIT_ROOM}' @ {LIVEKIT_URL}")
     print(f"LLM: {OLLAMA_MODEL} @ {OLLAMA_BASE_URL}")

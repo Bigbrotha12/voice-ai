@@ -39,3 +39,14 @@ services:
       # NOTE: plain list (no !override) - podman-compose chokes on the tag
       # here, and upstream sets no security_opt to merge with.
       - "label=disable"
+    healthcheck:
+      # No curl in the image; python stdlib against the in-container port.
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request as u; u.urlopen('http://127.0.0.1:17493/health', timeout=3)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s

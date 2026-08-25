@@ -29,6 +29,9 @@ services:
       - LIVEKIT_URL=ws://host.containers.internal:7880
       - VOICEBOX_URL=http://voicebox:17493
       - OLLAMA_BASE_URL=http://host.containers.internal:9091/v1
+      # Room access credentials (configured-keys LiveKit mode)
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
       # Tunables from repo .env (sourced by stack-up.sh)
       - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5-3b-instruct}
       - VOICEBOX_PROFILE_ID=${VOICEBOX_PROFILE_ID:-}
@@ -37,8 +40,18 @@ services:
       - WHISPER_MODEL=${WHISPER_MODEL:-deepdml/faster-whisper-large-v3-turbo-ct2}
       - WHISPER_DEVICE=${WHISPER_DEVICE:-auto}
       - WHISPER_COMPUTE_TYPE=${WHISPER_COMPUTE_TYPE:-default}
-      # Tools: streamable-HTTP MCP endpoints (comma-separated)
+      # Tools: streamable-HTTP MCP endpoints (comma-separated) + bearer auth
       - VOICEBOT_MCP_URLS=${VOICEBOT_MCP_URLS:-}
+      - VOICE_MCP_AUTH_TOKEN=${VOICE_MCP_AUTH_TOKEN:-}
+      # STT + backchannel tunables (documented in .env.example; without
+      # these pass-throughs the bundled bot ignores .env values entirely)
+      - VOICEBOX_STT_MODEL=${VOICEBOX_STT_MODEL:-turbo}
+      - VOICEBOT_BACKCHANNEL=${VOICEBOT_BACKCHANNEL:-1}
+      - VOICEBOT_BACKCHANNEL_MIN_SPEECH=${VOICEBOT_BACKCHANNEL_MIN_SPEECH:-5}
+      - VOICEBOT_BACKCHANNEL_DIP_RATIO=${VOICEBOT_BACKCHANNEL_DIP_RATIO:-0.45}
+      - VOICEBOT_BACKCHANNEL_DIP_HOLD_MS=${VOICEBOT_BACKCHANNEL_DIP_HOLD_MS:-200}
+      - VOICEBOT_BACKCHANNEL_COOLDOWN=${VOICEBOT_BACKCHANNEL_COOLDOWN:-8}
+      - VOICEBOT_BACKCHANNEL_NOISE_FLOOR=${VOICEBOT_BACKCHANNEL_NOISE_FLOOR:-150}
     devices:
       - "nvidia.com/gpu=all"
     security_opt:

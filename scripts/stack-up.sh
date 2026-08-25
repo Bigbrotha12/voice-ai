@@ -34,6 +34,7 @@ UPSTREAM_DIR="${VOICEBOX_UPSTREAM_DIR:-$HOME/Projects/ai/voicebox-upstream}"
 export CONTAINERS_REGISTRIES_CONF="$REPO_ROOT/docker/registries.conf"
 export VOICEBOT_CONTEXT="$REPO_ROOT/telephony/pipecat-bot"
 export VOICEBOT_BANK_DIR="$REPO_ROOT/backchannels"
+export REPO_ROOT
 
 [ -d "$UPSTREAM_DIR" ] || {
   echo "Upstream checkout not found at $UPSTREAM_DIR" >&2
@@ -47,6 +48,12 @@ if [ -f "$REPO_ROOT/.env" ]; then
   . "$REPO_ROOT/.env"
   set +a
 fi
+
+# Fail fast on required credentials. Shell-side assertions instead of
+# ${VAR:?} guards inside compose fragments: this podman-compose version
+# silently mangles those in list-form entries.
+: "${LIVEKIT_API_KEY:?set LIVEKIT_API_KEY in .env (openssl rand -hex 12)}"
+: "${LIVEKIT_API_SECRET:?set LIVEKIT_API_SECRET in .env (openssl rand -base64 32)}"
 
 CPU_MODE=0
 HOST_BOT=0
@@ -68,6 +75,7 @@ ACTION="${ARGS[0]:-up}"
 files=(-f "$UPSTREAM_DIR/docker-compose.yml" -f "$REPO_ROOT/docker/ports-override.yml")
 [ "$CPU_MODE" = 1 ] && files+=(-f "$REPO_ROOT/docker/cpu-override.yml")
 files+=(-f "$REPO_ROOT/docker/livekit.yml")
+files+=(-f "$REPO_ROOT/docker/token-mint.yml")
 if [ "$ACTION" != "up" ] || [ "$HOST_BOT" = 0 ]; then
   files+=(-f "$REPO_ROOT/docker/voicebot.yml")
 fi
