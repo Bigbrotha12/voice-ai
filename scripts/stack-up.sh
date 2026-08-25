@@ -33,6 +33,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 UPSTREAM_DIR="${VOICEBOX_UPSTREAM_DIR:-$HOME/Projects/ai/voicebox-upstream}"
 export CONTAINERS_REGISTRIES_CONF="$REPO_ROOT/docker/registries.conf"
 export VOICEBOT_CONTEXT="$REPO_ROOT/telephony/pipecat-bot"
+export VOICEBOT_BANK_DIR="$REPO_ROOT/backchannels"
 
 [ -d "$UPSTREAM_DIR" ] || {
   echo "Upstream checkout not found at $UPSTREAM_DIR" >&2
@@ -49,11 +50,16 @@ fi
 
 CPU_MODE=0
 HOST_BOT=0
+FORCE=0
 ARGS=()
 for arg in "$@"; do
   case "$arg" in
     --cpu) CPU_MODE=1 ;;
     --host-bot) HOST_BOT=1 ;;
+    # Force container recreation even when compose sees no config change -
+    # needed after code-only image rebuilds (podman-compose skips recreate
+    # on unchanged config hashes).
+    --force-recreate) FORCE=1 ;;
     *) ARGS+=("$arg") ;;
   esac
 done
@@ -73,7 +79,7 @@ compose() {
 
 case "$ACTION" in
   up)
-    compose up -d --build
+    compose up -d --build $([ "$FORCE" = 1 ] && echo --force-recreate)
     echo
     echo "Stack up. Voicebox REST/MCP: http://127.0.0.1:17600 (loopback)"
     echo "LiveKit signaling: ws://127.0.0.1:7880 | bot room join via ws://livekit:7880"

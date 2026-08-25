@@ -39,6 +39,7 @@ from loguru import logger
 from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import LLMRunFrame
+from pipecat.observers.user_bot_latency_observer import UserBotLatencyObserver
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -55,6 +56,7 @@ from pipecat.turns.user_stop import TurnAnalyzerUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
 
+from voicebot.backchannel import BackchannelInjectorProcessor, BackchannelTriggerProcessor, load_bank
 from voicebot.stt import VoiceboxSTTService
 from voicebot.tts import VoiceboxTTSService
 
@@ -77,6 +79,19 @@ WHISPER_MODEL = os.getenv("WHISPER_MODEL", "deepdml/faster-whisper-large-v3-turb
 WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "auto")
 WHISPER_COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE_TYPE", "default")
 VOICEBOX_STT_MODEL = os.getenv("VOICEBOX_STT_MODEL", "turbo")
+
+# Backchannel system (RESEARCH.md layer 4). Bank dir: container mounts the
+# repo's backchannels/ at /app/bank; host-side dev runs fall back to the
+# repo-relative path.
+BACKCHANNEL_ENABLED = os.getenv("VOICEBOT_BACKCHANNEL", "1").lower() not in ("0", "false", "no")
+BANK_DIR = next(
+    (
+        p
+        for p in (os.getenv("VOICEBOT_BACKCHANNEL_BANK", "/app/bank"), "backchannels")
+        if load_bank(p)
+    ),
+    os.getenv("VOICEBOT_BACKCHANNEL_BANK", "/app/bank"),
+)
 
 SYSTEM_INSTRUCTION = (
     "You are a helpful assistant in a live voice conversation. "
@@ -175,6 +190,37 @@ def build_stt() -> STTService:
     )
 
 
+def build_latency_observer() -> UserBotLatencyObserver:
+    """Per-turn latency logging: user-stop -> bot-speech, plus service TTFBs.
+
+    Phase 5 baseline measurement (RESEARCH.md). Headline number is
+    on_latency_measured; the breakdown attributes the turn to user_turn
+    (EOU wait + STT finalization), per-service TTFB, and sentence
+    aggregation.
+    """
+    observer = UserBotLatencyObserver()
+
+    @observer.event_handler("on_latency_measured")
+    async def _measured(_, latency: float):
+        logger.info(f"LATENCY user-stop -> bot-speech: {latency:.2f}s")
+
+    @observer.event_handler("on_latency_breakdown")
+    async def _breakdown(_, b):
+        parts = []
+        if b.user_turn_secs is not None:
+            parts.append(f"user_turn {b.user_turn_secs:.2f}s")
+        for t in b.ttfb:
+            name = t.processor.split("#")[0].removesuffix("Service")
+            parts.append(f"{name} ttfb {t.duration_secs:.2f}s")
+        if b.text_aggregation:
+            parts.append(f"agg {b.text_aggregation.duration_secs:.2f}s")
+        for fc in b.function_calls:
+            parts.append(f"{fc.function_name} {fc.duration_secs:.2f}s")
+        logger.info("LATENCY breakdown: " + " | ".join(parts))
+
+    return observer
+
+
 def build_pipeline() -> tuple[Pipeline, LiveKitTransport, LLMContext]:
     if not VOICEBOX_PROFILE_ID:
         raise ValueError("VOICEBOX_PROFILE_ID env var required")
@@ -223,14 +269,33 @@ def build_pipeline() -> tuple[Pipeline, LiveKitTransport, LLMContext]:
         ),
     )
 
+    audio_out_rate = 24000
+    backchannel_input: list = []
+    backchannel_output: list = []
+    if BACKCHANNEL_ENABLED:
+        # Layer 4: pre-rendered acknowledgments during long user monologues.
+        # Trigger rides the input path (audio energy + VAD state); injector
+        # sits right before output and swaps BackchannelFrame -> raw PCM,
+        # bypassing LLM+TTS entirely.
+        trigger = BackchannelTriggerProcessor(bank_dir=BANK_DIR)
+        injector = BackchannelInjectorProcessor(sample_rate=audio_out_rate)
+        if trigger.enabled:
+            logger.info(f"backchannel: {trigger.clip_count} clips from {BANK_DIR}")
+            backchannel_input.append(trigger)
+            backchannel_output.append(injector)
+        else:
+            logger.info("backchannel: bank empty, disabled")
+
     pipeline = Pipeline(
         [
             transport.input(),
             VADProcessor(vad_analyzer=SileroVADAnalyzer()),
+            *backchannel_input,
             stt,
             user_aggregator,
             llm,
             tts,
+            *backchannel_output,
             transport.output(),
             assistant_aggregator,
         ]
@@ -245,7 +310,12 @@ async def main():
     worker = PipelineWorker(
         pipeline,
         params=PipelineParams(enable_metrics=True, enable_usage_metrics=True),
+        # Framework default is 300s: idle cancel kills the runner -> container
+        # exit -> podman restart churn. 30min keeps the bot resident between
+        # conversations.
+        idle_timeout_secs=1800,
     )
+    worker.add_observer(build_latency_observer())
 
     @transport.event_handler("on_participant_connected")
     async def on_participant_connected(transport, participant_id: str):

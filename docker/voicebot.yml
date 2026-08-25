@@ -43,6 +43,10 @@ services:
       - "label=disable"
     volumes:
       - voicebot-hf-cache:/home/voicebot/.cache/huggingface
+      # Pre-rendered backchannel clips (scripts/backchannel-bank.py).
+      # Exported by stack-up.sh - podman-compose does NOT support nested
+      # ${A:-${B}} fallbacks here.
+      - ${VOICEBOT_BANK_DIR}:/app/bank:ro
     networks:
       - voicebox-net
     deploy:

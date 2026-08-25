@@ -54,6 +54,45 @@ async def resolve_profile_id(client: httpx.AsyncClient, name_or_none: str | None
     return profiles[0]["id"]
 
 
+async def resolve_engine_profile(
+    client: httpx.AsyncClient, engine: str, name_or_none: str | None
+) -> tuple[str, str]:
+    """Pick a (profile_id, name) the engine accepts.
+
+    Some engines reject cloned-voice profiles with HTTP 400 (kokoro uses
+    preset voices), so a blind "first profile" pick can fail. Probes each
+    candidate with a tiny generation and returns the first that works.
+    """
+    explicit = await resolve_profile_id(client, name_or_none) if name_or_none else None
+
+    resp = await client.get("/profiles")
+    profiles = resp.json()
+    if isinstance(profiles, dict):
+        profiles = profiles.get("profiles", [])
+    entries = [(p["id"], p.get("name") or p["id"]) for p in profiles]
+
+    candidates: list[tuple[str, str]] = []
+    for entry in entries:
+        if explicit and entry[0] == explicit:
+            candidates.insert(0, entry)
+        elif entry not in candidates:
+            candidates.append(entry)
+
+    for pid, pname in candidates:
+        try:
+            async with client.stream(
+                "POST",
+                "/generate/stream",
+                json={"text": ".", "profile_id": pid, "engine": engine},
+                headers={"X-Voicebox-Client-Id": CLIENT_ID},
+            ) as resp:
+                if resp.status_code == 200:
+                    return pid, pname
+        except Exception:
+            pass
+    raise SystemExit(f"no profile accepted engine '{engine}' (cloned-voice rejection likely)")
+
+
 async def timed_stream(
     client: httpx.AsyncClient, profile_id: str, engine: str, text: str
 ) -> tuple[float, float]:
@@ -121,11 +160,17 @@ async def main() -> None:
     args = ap.parse_args()
 
     async with httpx.AsyncClient(base_url=BASE_URL, timeout=httpx.Timeout(600.0)) as client:
-        profile_id = await resolve_profile_id(client, args.profile)
-        print(f"profile_id: {profile_id}")
-
         rows: list[str] = []
         for engine in [e.strip() for e in args.engines.split(",") if e.strip()]:
+            try:
+                profile_id, profile_name = await resolve_engine_profile(
+                    client, engine, args.profile
+                )
+            except SystemExit as exc:
+                print(f"\n{engine}: SKIPPED ({exc})")
+                continue
+            print(f"{engine}: profile '{profile_name}' ({profile_id})")
+
             try:
                 # Warmup: absorb model load outside the measurements.
                 await timed_stream(client, profile_id, engine, TEXTS["short"])
