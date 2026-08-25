@@ -37,6 +37,8 @@ services:
       - WHISPER_MODEL=${WHISPER_MODEL:-deepdml/faster-whisper-large-v3-turbo-ct2}
       - WHISPER_DEVICE=${WHISPER_DEVICE:-auto}
       - WHISPER_COMPUTE_TYPE=${WHISPER_COMPUTE_TYPE:-default}
+      # Tools: streamable-HTTP MCP endpoints (comma-separated)
+      - VOICEBOT_MCP_URLS=${VOICEBOT_MCP_URLS:-}
     devices:
       - "nvidia.com/gpu=all"
     security_opt:

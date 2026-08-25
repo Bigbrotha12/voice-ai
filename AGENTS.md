@@ -14,8 +14,8 @@ or patch upstream; everything we own lives in this repo.
 |---|---|---|
 | Voicebox runtime | `~/Projects/ai/voicebox-upstream` (sibling dir) | Podman container, pinned tag v0.5.0; owns TTS/kokoro + REST/MCP |
 | LiveKit media plane | `docker/livekit.yml` (pinned v1.13.5) | Sibling container, dev mode, loopback-only; bot joins rooms over WebRTC |
-| Pipecat agent | `telephony/pipecat-bot/` | Bundled container (`--host-bot` opts out); faster-whisper STT in-process, llama.cpp LLM host-native |
-| Wrapper MCP | `services/voice-mcp/` | FastMCP server exposing `say`, `voices`, `listen` |
+| Pipecat agent | `telephony/pipecat-bot/` | Bundled container (`--host-bot` opts out); faster-whisper STT in-process, llama.cpp LLM via queues proxy; tool calling + MCP bridge (`VOICEBOT_MCP_URLS`) |
+| Wrapper MCP | `services/voice-mcp/` | FastMCP server exposing `say`, `voices`, `listen`; stdio for agents, `VOICE_MCP_TRANSPORT=http` for the bot |
 | Clients | opencode / Claude Code configs | Registered per docs/setup.md |
 | Telephony (future) | `telephony/` | LiveKit SIP + Telnyx trunk; turn-taking plan in `telephony/RESEARCH.md` |
 

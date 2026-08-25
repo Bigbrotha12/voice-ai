@@ -36,6 +36,8 @@ from pathlib import Path
 
 from livekit import api
 from loguru import logger
+from datetime import datetime
+from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import LLMRunFrame
@@ -48,6 +50,7 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMUserAggregatorParams,
 )
 from pipecat.processors.audio.vad_processor import VADProcessor
+from pipecat.services.mcp_service import MCPClient
 from pipecat.services.ollama.llm import OLLamaLLMService
 from pipecat.services.stt_service import STTService
 from pipecat.services.whisper.stt import WhisperSTTService
@@ -92,6 +95,10 @@ BANK_DIR = next(
     ),
     os.getenv("VOICEBOT_BACKCHANNEL_BANK", "/app/bank"),
 )
+
+# Tools: native functions + MCP servers. VOICEBOT_MCP_URLS is a comma-
+# separated list of streamable-HTTP MCP endpoints.
+MCP_URLS = [u.strip() for u in os.getenv("VOICEBOT_MCP_URLS", "").split(",") if u.strip()]
 
 SYSTEM_INSTRUCTION = (
     "You are a helpful assistant in a live voice conversation. "
@@ -190,6 +197,54 @@ def build_stt() -> STTService:
     )
 
 
+def _native_tool_schemas() -> list[FunctionSchema]:
+    """Built-in tools that don't need an MCP server."""
+    return [
+        FunctionSchema(
+            name="get_current_time",
+            description="Get the assistant's current local date and time.",
+            properties={},
+            required=[],
+        ),
+    ]
+
+
+async def _register_native_handlers(llm: OLLamaLLMService) -> None:
+    async def get_current_time(params):
+        await params.result_callback(datetime.now().isoformat(timespec="seconds"))
+
+    llm.register_function("get_current_time", get_current_time)
+
+
+async def setup_tools(llm: OLLamaLLMService) -> tuple[list[FunctionSchema], list[MCPClient]]:
+    """Register native handlers + MCP servers; return schemas for LLMContext.
+
+    MCP servers are streamable-HTTP endpoints (VOICEBOT_MCP_URLS, comma-
+    separated). A server that's down degrades to a warning, never a crash -
+    the conversation continues with whatever tools did register.
+    """
+    schemas: list[FunctionSchema] = _native_tool_schemas()
+    await _register_native_handlers(llm)
+
+    clients: list[MCPClient] = []
+    for url in MCP_URLS:
+        from mcp.client.session_group import StreamableHttpParameters
+
+        client = MCPClient(server_params=StreamableHttpParameters(url=url))
+        try:
+            await client.start()
+            tools = await client.register_tools(llm)
+            schemas.extend(tools.standard_tools)
+            names = [t.name for t in tools.standard_tools]
+            logger.info(f"tools: {len(names)} MCP tools from {url}: {names}")
+            clients.append(client)
+        except Exception as exc:
+            logger.warning(f"tools: MCP server unreachable, skipping {url}: {exc}")
+
+    logger.info(f"tools: {len(schemas)} functions available to LLM")
+    return schemas, clients
+
+
 def build_latency_observer() -> UserBotLatencyObserver:
     """Per-turn latency logging: user-stop -> bot-speech, plus service TTFBs.
 
@@ -221,7 +276,7 @@ def build_latency_observer() -> UserBotLatencyObserver:
     return observer
 
 
-def build_pipeline() -> tuple[Pipeline, LiveKitTransport, LLMContext]:
+async def build_pipeline() -> tuple[Pipeline, LiveKitTransport, LLMContext, list[MCPClient]]:
     if not VOICEBOX_PROFILE_ID:
         raise ValueError("VOICEBOX_PROFILE_ID env var required")
 
@@ -254,7 +309,8 @@ def build_pipeline() -> tuple[Pipeline, LiveKitTransport, LLMContext]:
         client_id="voicebot-agent",
     )
 
-    context = LLMContext()
+    tool_schemas, mcp_clients = await setup_tools(llm)
+    context = LLMContext(tools=tool_schemas)
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
         user_params=LLMUserAggregatorParams(
@@ -301,11 +357,11 @@ def build_pipeline() -> tuple[Pipeline, LiveKitTransport, LLMContext]:
         ]
     )
 
-    return pipeline, transport, context
+    return pipeline, transport, context, mcp_clients
 
 
 async def main():
-    pipeline, transport, context = build_pipeline()
+    pipeline, transport, context, mcp_clients = await build_pipeline()
 
     worker = PipelineWorker(
         pipeline,
@@ -335,9 +391,16 @@ async def main():
     context.add_message({"role": "developer", "content": SYSTEM_INSTRUCTION})
     await worker.queue_frames([LLMRunFrame()])
 
-    runner = WorkerRunner()
-    await runner.add_workers(worker)
-    await runner.run()
+    try:
+        runner = WorkerRunner()
+        await runner.add_workers(worker)
+        await runner.run()
+    finally:
+        for client in mcp_clients:
+            try:
+                await client.close()
+            except Exception:
+                pass
 
 
 def run():

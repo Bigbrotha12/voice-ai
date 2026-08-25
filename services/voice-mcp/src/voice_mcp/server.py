@@ -11,6 +11,7 @@ Tools:
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 from typing import Any
 
@@ -150,7 +151,17 @@ async def voices() -> dict[str, Any]:
 
 
 def main() -> None:
-    mcp.run()
+    transport = os.environ.get("VOICE_MCP_TRANSPORT", "stdio").lower()
+    if transport == "stdio":
+        mcp.run()
+        return
+    # HTTP (streamable) for remote clients - e.g. the pipecat bot's
+    # MCPClient. Loopback by default; the endpoint has no auth.
+    mcp.run(
+        transport=transport,
+        host=os.environ.get("VOICE_MCP_HOST", "127.0.0.1"),
+        port=int(os.environ.get("VOICE_MCP_PORT", "17601")),
+    )
 
 
 if __name__ == "__main__":
