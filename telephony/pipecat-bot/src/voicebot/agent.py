@@ -96,6 +96,7 @@ WHISPER_COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE_TYPE", "default")
 VOICEBOX_STT_MODEL = os.getenv("VOICEBOX_STT_MODEL", "turbo")
 OPENAI_STT_BASE_URL = os.getenv("OPENAI_STT_BASE_URL", "http://127.0.0.1:8000")
 OPENAI_STT_MODEL = os.getenv("OPENAI_STT_MODEL", "whisper-1")
+OPENAI_STT_LANGUAGE = os.getenv("OPENAI_STT_LANGUAGE", "")
 
 # TTS selection. "voicebox" (default) uses Voicebox profiles; "piper" uses
 # the glados-tts service (OpenAI-speech-shaped, wav requested explicitly).
@@ -292,6 +293,7 @@ def build_stt() -> STTService:
         return OpenAIBatchSTTService(
             base_url=OPENAI_STT_BASE_URL,
             model=OPENAI_STT_MODEL,
+            language=OPENAI_STT_LANGUAGE or None,
         )
     raise ValueError(
         f"Unknown VOICEBOT_STT_PROVIDER '{provider}' "

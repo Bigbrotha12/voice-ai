@@ -35,19 +35,21 @@ class OpenAIBatchSTTService(SegmentedSTTService):
         *,
         base_url: str | None = None,
         model: str = "whisper-1",
+        language: str | None = None,
         sample_rate: int = 16000,
         http_client: httpx.AsyncClient | None = None,
         **kwargs,
     ) -> None:
         super().__init__(
             sample_rate=sample_rate,
-            settings=STTSettings(model=model, language=None),
+            settings=STTSettings(model=model, language=language),
             **kwargs,
         )
         self._base_url = (
             base_url or os.environ.get("OPENAI_STT_BASE_URL", DEFAULT_BASE_URL)
         ).rstrip("/")
         self._model = model
+        self._language = language
         self._http = http_client or httpx.AsyncClient(
             base_url=self._base_url, timeout=httpx.Timeout(120.0)
         )
@@ -62,7 +64,7 @@ class OpenAIBatchSTTService(SegmentedSTTService):
             resp = await self._http.post(
                 "/v1/audio/transcriptions",
                 files={"file": ("audio.wav", audio, "audio/wav")},
-                data={"model": self._model},
+                data={"model": self._model, **({"language": self._language} if self._language else {})},
             )
 
             # whisper-stt answers 400 for both empty uploads and "no speech
