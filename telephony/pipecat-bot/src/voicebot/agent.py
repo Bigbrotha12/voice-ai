@@ -34,8 +34,11 @@ from __future__ import annotations
 
 import asyncio
 import ctypes
+import json
 import os
 import socket
+import subprocess
+import sys
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -105,14 +108,86 @@ PIPER_SPEED = float(os.getenv("PIPER_SPEED", "1.0"))
 # repo's backchannels/ at /app/bank; host-side dev runs fall back to the
 # repo-relative path.
 BACKCHANNEL_ENABLED = os.getenv("VOICEBOT_BACKCHANNEL", "1").lower() not in ("0", "false", "no")
-BANK_DIR = next(
-    (
-        p
-        for p in (os.getenv("VOICEBOT_BACKCHANNEL_BANK", "/app/bank"), "backchannels")
-        if load_bank(p)
-    ),
-    os.getenv("VOICEBOT_BACKCHANNEL_BANK", "/app/bank"),
-)
+
+
+def _repo_root() -> Path:
+    """Locate the repo root from this file's position (src/voicebot/agent.py)."""
+    return Path(__file__).resolve().parents[4]
+
+
+def _bank_meta(bank_dir: Path) -> dict | None:
+    meta_path = bank_dir / ".meta.json"
+    if not meta_path.exists():
+        return None
+    try:
+        return json.loads(meta_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _bank_is_stale(bank_dir: Path) -> bool:
+    """True when the bank sentinel doesn't match the current VOICEBOX_PROFILE_ID."""
+    if not VOICEBOX_PROFILE_ID:
+        return False  # no profile set; can't validate
+    meta = _bank_meta(bank_dir)
+    if meta is None:
+        return True  # no sentinel → stale
+    return meta.get("profile_id") != VOICEBOX_PROFILE_ID
+
+
+def _regenerate_bank(bank_dir: Path) -> bool:
+    """Invoke backchannel-bank.py for the current profile.
+
+    Best-effort: returns True if the bank has usable clips after the attempt,
+    False only when the bank is empty (bot disables backchannels).
+    """
+    script = _repo_root() / "scripts" / "backchannel-bank.py"
+    if not script.exists():
+        logger.warning("bank: backchannel-bank.py not found, skipping regeneration")
+        return load_bank(bank_dir)
+    logger.info(f"bank: profile changed → regenerating for {VOICEBOX_PROFILE_ID}")
+    try:
+        result = subprocess.run(
+            [
+                sys.executable, str(script),
+                "--profile-id", VOICEBOX_PROFILE_ID,
+                "--force",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=300,
+            env={**os.environ, "VOICEBOX_URL": VOICEBOX_URL},
+        )
+        if result.returncode != 0:
+            logger.warning(f"bank: regeneration failed (rc={result.returncode}): {result.stderr[:200]}")
+        else:
+            logger.info("bank: regeneration complete")
+    except subprocess.TimeoutExpired:
+        logger.warning("bank: regeneration timed out after 300s")
+    except Exception as exc:
+        logger.warning(f"bank: regeneration error: {exc}")
+    return load_bank(bank_dir)
+
+
+def _resolve_bank() -> Path:
+    candidates = [
+        Path(os.getenv("VOICEBOT_BACKCHANNEL_BANK", "/app/bank")),
+        Path("backchannels"),
+    ]
+    for candidate in candidates:
+        if load_bank(candidate) and not _bank_is_stale(candidate):
+            return candidate
+
+    # Stale or empty — try regenerating for the current profile.
+    for candidate in candidates:
+        if load_bank(candidate):
+            if _regenerate_bank(candidate):
+                return candidate
+
+    return candidates[0]
+
+
+BANK_DIR = _resolve_bank()
 
 # Tools: native functions + MCP servers. VOICEBOT_MCP_URLS is a comma-
 # separated list of streamable-HTTP endpoints; VOICE_MCP_AUTH_TOKEN is the

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from pipecat.services.whisper.stt import WhisperSTTService as RealWhisperSTTService
 
@@ -88,3 +90,35 @@ class TestMcpHostGuard:
 
         assert clients == []
         assert len(schemas) == 1  # the native get_current_time schema only
+
+
+class TestBankValidation:
+    def test_bank_meta_reads_sentinel(self, tmp_path):
+        meta = {"profile_id": "abc-123", "engine": "chatterbox_turbo"}
+        (tmp_path / ".meta.json").write_text(json.dumps(meta))
+        assert agent._bank_meta(tmp_path) == meta
+
+    def test_bank_meta_missing(self, tmp_path):
+        assert agent._bank_meta(tmp_path) is None
+
+    def test_bank_meta_corrupt(self, tmp_path):
+        (tmp_path / ".meta.json").write_text("not json!!!")
+        assert agent._bank_meta(tmp_path) is None
+
+    def test_bank_is_stale_no_profile(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(agent, "VOICEBOX_PROFILE_ID", "")
+        assert agent._bank_is_stale(tmp_path) is False
+
+    def test_bank_is_stale_no_sentinel(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(agent, "VOICEBOX_PROFILE_ID", "new-id")
+        assert agent._bank_is_stale(tmp_path) is True
+
+    def test_bank_is_stale_mismatch(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(agent, "VOICEBOX_PROFILE_ID", "new-id")
+        (tmp_path / ".meta.json").write_text(json.dumps({"profile_id": "old-id"}))
+        assert agent._bank_is_stale(tmp_path) is True
+
+    def test_bank_is_fresh_match(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(agent, "VOICEBOX_PROFILE_ID", "same-id")
+        (tmp_path / ".meta.json").write_text(json.dumps({"profile_id": "same-id"}))
+        assert agent._bank_is_stale(tmp_path) is False

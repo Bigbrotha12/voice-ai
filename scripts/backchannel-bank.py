@@ -10,9 +10,13 @@ Output: BANK_DIR/<phrase>__take<N>.wav, mono s16le 24kHz - consumed by
 voicebot.backchannel.BackchannelInjectorProcessor. The repo's backchannels/
 dir is mounted read-only into the bot container (docker/voicebot.yml).
 
+A .meta.json sentinel is written after successful generation so the bot
+can detect stale banks (profile changed) and regenerate automatically.
+
 Usage:
   ./scripts/backchannel-bank.py                     # default profile probing
   ./scripts/backchannel-bank.py --profile "Benchmark Clone" --takes 2
+  ./scripts/backchannel-bank.py --profile-id abc123 --force
 """
 
 from __future__ import annotations
@@ -20,10 +24,12 @@ from __future__ import annotations
 import argparse
 import asyncio
 import io
+import json
 import os
 import struct
 import sys
 import wave
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -109,15 +115,26 @@ async def _ensure_model(client: httpx.AsyncClient, pid: str) -> None:
     raise SystemExit("bootstrap timed out after 30 min")
 
 
-async def pick_profile(client: httpx.AsyncClient, name: str | None) -> str:
+async def pick_profile(client: httpx.AsyncClient, name: str | None, profile_id: str | None) -> tuple[str, str]:
+    """Return (profile_id, profile_name) for the selected profile.
+
+    *profile_id* takes precedence over *name* when both are given.
+    """
     resp = await client.get("/profiles")
     profiles = resp.json()
     if isinstance(profiles, dict):
         profiles = profiles.get("profiles", [])
+
+    if profile_id:
+        for p in profiles:
+            if p.get("id") == profile_id:
+                return p["id"], p.get("name", p["id"])
+        raise SystemExit(f"profile id '{profile_id}' not found")
+
     if name:
         for p in profiles:
             if p.get("name", "").lower() == name.lower():
-                return p["id"]
+                return p["id"], p.get("name", name)
         raise SystemExit(f"profile '{name}' not found")
 
     # chatterbox_turbo is a cloning engine: preset profiles are kokoro-only.
@@ -126,30 +143,31 @@ async def pick_profile(client: httpx.AsyncClient, name: str | None) -> str:
     ordered += [p for p in profiles if p not in ordered]
     for p in ordered:
         if await _probe(client, p["id"]):
-            return p["id"]
+            return p["id"], p.get("name", p["id"])
 
     # All probes failed - the model may not be downloaded yet. Bootstrap on
     # the first candidate and retry.
-    target = ordered[0]["id"] if ordered else None
+    target = ordered[0] if ordered else None
     if not target:
         raise SystemExit("no voice profiles found - create one first")
-    await _ensure_model(client, target)
-    if await _probe(client, target):
-        return target
+    await _ensure_model(client, target["id"])
+    if await _probe(client, target["id"]):
+        return target["id"], target.get("name", target["id"])
     raise SystemExit("no profile accepted chatterbox_turbo after bootstrap")
 
 
 async def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--profile", default=None, help="profile name (default: probe)")
+    ap.add_argument("--profile-id", default=None, help="profile id (overrides --profile)")
     ap.add_argument("--takes", type=int, default=2, help="takes per phrase variant")
     ap.add_argument("--force", action="store_true", help="re-render existing clips")
     args = ap.parse_args()
 
     BANK_DIR.mkdir(parents=True, exist_ok=True)
     async with httpx.AsyncClient(base_url=BASE_URL, timeout=httpx.Timeout(300)) as client:
-        profile_id = await pick_profile(client, args.profile)
-        print(f"profile: {profile_id}")
+        profile_id, profile_name = await pick_profile(client, args.profile, args.profile_id)
+        print(f"profile: {profile_name} ({profile_id})")
 
         rendered = skipped = failed = 0
         for phrase in PHRASES:
@@ -180,6 +198,15 @@ async def main() -> None:
                 except Exception as exc:
                     print(f"FAIL {out.name}: {exc}")
                     failed += 1
+
+        # Write sentinel so the bot can detect stale banks.
+        meta = {
+            "engine": ENGINE,
+            "profile_id": profile_id,
+            "profile_name": profile_name,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        (BANK_DIR / ".meta.json").write_text(json.dumps(meta, indent=2) + "\n")
 
     total = len(list(BANK_DIR.glob("*.wav")))
     print(f"\nbank: {total} clips in {BANK_DIR} ({rendered} rendered, {skipped} kept, {failed} failed)")
