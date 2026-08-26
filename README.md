@@ -1,6 +1,6 @@
 # Voice Agent Stack
 
-Learning project: open-source voice I/O for AI agents, built on
+open-source voice I/O for AI agents, built on
 [Voicebox](https://github.com/jamiepine/voicebox). Agents get two
 primitives — **speak** (TTS through cloned/preset voices) and **listen**
 (STT through Whisper) — exposed over MCP so any MCP-aware client can
