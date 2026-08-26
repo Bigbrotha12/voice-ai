@@ -37,6 +37,7 @@
     <label>LiveKit URL <input id="url" value="ws://localhost:7880"></label>
     <label>Room Name <input id="room" value="voicebot-room"></label>
     <label>Participant Name <input id="name" value="User"></label>
+    <label>Token-Mint Secret <input id="mintSecret" type="password" placeholder="TOKEN_MINT_SHARED_SECRET"></label>
     <button id="joinBtn" class="btn-primary">Join Room</button>
     <button id="leaveBtn" class="btn-danger" disabled>Leave Room</button>
     <div id="status" class="status" style="display:none;"></div>
@@ -62,6 +63,7 @@
     const urlInput = document.getElementById('url');
     const roomInput = document.getElementById('room');
     const nameInput = document.getElementById('name');
+    const mintSecretInput = document.getElementById('mintSecret');
     const joinBtn = document.getElementById('joinBtn');
     const leaveBtn = document.getElementById('leaveBtn');
     const statusDiv = document.getElementById('status');
@@ -94,16 +96,24 @@
 
     async function getToken(roomName, identity) {
       // Tokens come from the token-mint service - this page must never see
-      // the LiveKit API secret. Override the mint URL for remote setups.
+      // the LiveKit API secret. The shared secret gates minting (hardened
+      // token-mint requires it); it is entered per browser and kept in
+      // localStorage. Override the mint URL for remote setups.
       const mintUrl = new URLSearchParams(location.search).get('mint') ||
         'http://localhost:17602';
+      const secret = (mintSecretInput.value || localStorage.getItem('tokenMintSecret') || '').trim();
+      const headers = { 'Content-Type': 'application/json' };
+      if (secret) headers['Authorization'] = `Bearer ${secret}`;
       const resp = await fetch(`${mintUrl}/token`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({ identity, room: roomName, name: identity }),
       });
       if (!resp.ok) {
         const detail = await resp.text().catch(() => '');
+        if (resp.status === 401 && !secret) {
+          throw new Error('token-mint 401: enter the shared secret (TOKEN_MINT_SHARED_SECRET)');
+        }
         throw new Error(`token-mint ${resp.status}: ${detail.slice(0, 120)}`);
       }
       const data = await resp.json();
@@ -144,6 +154,9 @@
 
       try {
         const token = await getToken(roomInput.value.trim(), nameInput.value.trim() || 'User');
+        if (mintSecretInput.value.trim()) {
+          localStorage.setItem('tokenMintSecret', mintSecretInput.value.trim());
+        }
         room = new LK.Room({ adaptiveStream: true, dynacast: true });
 
         room.on(LK.RoomEvent.TrackSubscribed, (track, pub, participant) => {
@@ -206,6 +219,7 @@
     leaveBtn.addEventListener('click', () => { log('Leaving room...'); cleanup(); });
     window.addEventListener('beforeunload', () => { if (room) cleanup(); });
 
+    mintSecretInput.value = localStorage.getItem('tokenMintSecret') || '';
     log(`SDK loaded: LivekitClient ${LK ? LK.version || '(version n/a)' : 'MISSING'}`,
         LK && LK.createLocalAudioTrack ? 'info' : 'error');
   </script>

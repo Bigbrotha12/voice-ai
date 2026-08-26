@@ -1,0 +1,30 @@
+# GPU whisper-stt on the podman host (not k3s). mirrors the voicebox
+# CDI passthrough pattern from ports-override.yml.
+services:
+  whisper-stt:
+    build:
+      context: ../whisper-stt
+      dockerfile: Dockerfile
+    container_name: whisper-stt
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      - WHISPER_MODEL=deepdml/faster-whisper-large-v3-turbo-ct2
+      - WHISPER_DEVICE=cuda
+      - WHISPER_COMPUTE_TYPE=float16
+    user: "0:0"
+    devices:
+      - "nvidia.com/gpu=all"
+    security_opt:
+      - "label=disable"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/healthz', timeout=3)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 120s
