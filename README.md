@@ -15,11 +15,9 @@ WebRTC via LiveKit.
 │  voicebox:17600 ─── GPU TTS engine (kokoro, chatterbox, ...)  │
 │  livekit:7880   ─── WebRTC signaling + media                  │
 │  token-mint:17602 ─ JWT minter for browser/mobile             │
-│  whisper-stt:8001 ─ GPU STT (faster-whisper large-v3-turbo)   │
-│  glados-tts:5001 ── Piper TTS (persistent session, fallback)  │
 │  llama-small:19091 ─ LLM (Qwen3-8B via queues proxy)          │
 │                                                               │
-│  pipecat bot ─── VAD → STT(GPU) → LLM → TTS(kokoro) → LiveKit │
+│  pipecat-bot ─── VAD → STT → LLM → TTS → LiveKit              │
 └───────────────────────────────────────────────────────────────┘
 ```
 
