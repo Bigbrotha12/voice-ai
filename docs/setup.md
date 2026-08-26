@@ -21,11 +21,47 @@ Note: `upstream-up.sh` injects a scoped `CONTAINERS_REGISTRIES_CONF`
 base-image names in upstream's Dockerfile non-interactively - your global
 podman config stays untouched.
 
+## 1b. Full stack bundle (voicebox + livekit + bot)
+
+`scripts/stack-up.sh` wraps everything in ONE compose project (same `-f`
+stacking pattern), so all services share a network (`ws://livekit:7880`,
+`http://voicebox:17493` internally) and one up/down/logs lifecycle:
+
+```sh
+./scripts/stack-up.sh                # voicebox + livekit + bot (GPU)
+./scripts/stack-up.sh --host-bot     # iterate on agent code: run it on the host
+./scripts/stack-up.sh logs           # follow everything
+./scripts/stack-up.sh down           # stop all three
+```
+
+Details:
+- **livekit** (`docker/livekit.yml`, pinned v1.13.5): dev mode - no auth,
+  accepts any devkey/secret-signed token. HOST-networked (not bridge): ICE
+  candidates must point at reachable interfaces, and loopback-only port
+  publishes leave the browser with container-IP candidates it cannot reach
+  ("could not establish pc connection"). Ports: `7880/tcp` signaling,
+  `7881/tcp + 7882/udp` media, all interfaces. Browsers connect to
+  `ws://localhost:7880`; the bot uses `host.containers.internal`.
+- **voicebot** (`docker/voicebot.yml` + `telephony/pipecat-bot/Containerfile`):
+  multi-stage uv build with faster-whisper GPU wheels; CDI GPU passthrough +
+  `label=disable` like voicebox. Requires `VOICEBOX_PROFILE_ID` in `.env`
+  (restart-loops with a clear error otherwise). First start downloads the
+  turbo CT2 model (~1.5GB) into the `voicebot-hf-cache` volume.
+- The bot reaches llama.cpp at `host.containers.internal:19091` - start
+  `llama-server` on the host separately; it is NOT part of this stack.
+- Restart coupling is per-service (separate containers), unlike a fused
+  image. Rebuild just the bot after code edits:
+  `podman-compose ... up -d --build voicebot`, or rerun `stack-up.sh`.
+- `--cpu` mode still applies only to voicebox; the bot keeps its own GPU
+  wheels regardless (drop the `[gpu]` extra in the Containerfile for a
+  fully CPU stack).
+
 Verify:
 
 ```sh
 curl http://127.0.0.1:17600/health
 curl http://127.0.0.1:17600/profiles
+podman ps --format "{{.Names}} {{.Status}}"   # voicebox, livekit, voicebot
 ```
 
 Then **create or import a voice profile via the web UI** at
@@ -115,6 +151,19 @@ REST-level check independent of MCP:
 ```sh
 ./scripts/smoke-test.sh         # profiles -> speak -> SSE status -> PASS/FAIL
 ```
+
+## Security model
+
+What's protected and what deliberately isn't (homelab posture):
+
+| Surface | Protection |
+|---|---|
+| Voicebox REST/MCP (`17600`) | loopback-only bind, no auth - never expose |
+| LiveKit signaling/media (`7880-7882`) | configured-keys mode: room joins need JWTs signed with `LIVEKIT_API_KEY/SECRET` (`.env`). Host-networked, so tokens are the gate; add a firewall scope for internet-facing use |
+| Browser/mobile clients | never hold LiveKit secrets - they mint short-lived JWTs from **token-mint** (`127.0.0.1:17602`, optional `TOKEN_MINT_SHARED_SECRET` bearer gate) |
+| voice-mcp HTTP (`17601`) | bearer token via `VOICE_MCP_AUTH_TOKEN`; the bot sends it automatically. REQUIRED when bound beyond loopback |
+| queues proxy (`9090-9092`) | outside this repo's ownership - unauthenticated on LAN by design for k3s LibreChat; consider header auth/firewall there |
+| Secrets | all in gitignored `.env`; rotate with `openssl rand`. The old devkey/secret pair embedded in test-client.html is gone |
 
 ## Environment variables
 

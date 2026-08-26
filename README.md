@@ -31,8 +31,8 @@ Cursor) can use them. A later phase adds telephony so agents can hold real phone
 - [x] **Phase 1** — Voicebox runtime up (podman container, CUDA via CDI passthrough)
 - [x] **Phase 2** — Upstream MCP wired into opencode; speak verified end-to-end
 - [x] **Phase 3** — Wrapper MCP server live: `say` (auto-play), `voices`, `listen` (mic → Whisper)
-- [x] **Phase 4** — Telephony agent: LiveKit transport + Voicebox TTS/STT + Ollama LLM (`telephony/pipecat-bot/`)
-- [ ] **Phase 5** — Conversation dynamics: semantic end-of-turn, barge-in tuning, pre-rendered backchannels, speculative reply pipelining
+- [x] **Phase 4** — Telephony agent: LiveKit transport + Voicebox TTS + local faster-whisper STT + llama.cpp LLM (`telephony/pipecat-bot/`)
+- [~] **Phase 5** — Conversation dynamics: semantic end-of-turn (smart-turn v3, done), barge-in tuning, pre-rendered backchannels, speculative reply pipelining
 
 See `docs/setup.md` for bring-up instructions and `telephony/RESEARCH.md`
 for the Phase 4 decision record.
@@ -41,13 +41,13 @@ for the Phase 4 decision record.
 
 ```
 .
-├── opencode.json         # registers upstream MCP + our wrapper for opencode
-├── services/voice-mcp/   # Wrapper MCP server (FastMCP, Python)
-├── docker/               # scoped podman registries config + compose port override
-├── scripts/              # upstream-up.sh, smoke-test.sh, mcp-inspect.sh, play-latest.sh
-├── docs/                 # setup and operations notes
-├── telephony/            # Phase 4 research and future code
-└── AGENTS.md             # conventions for agent sessions in this repo
+├── opencode.json           # registers upstream MCP + our wrapper for opencode
+├── services/voice-mcp/     # Wrapper MCP server (FastMCP, Python)
+├── docker/                 # compose overrides: ports/GPU, LiveKit, bot service
+├── scripts/                # stack-up.sh, upstream-up.sh, smoke-test.sh, warmup.sh, ...
+├── docs/                   # setup and operations notes
+├── telephony/              # pipecat-bot (LiveKit voice agent) + research notes
+└── AGENTS.md               # conventions for agent sessions in this repo
 ```
 
 ## Quick check (once Voicebox is running)

@@ -124,14 +124,26 @@ long-term alternative to all these pipeline tricks.
 
 ### Adoption order in our stack
 
-1. Phase 4 baseline call with Pipecat defaults (Silero + timeout EOU +
-   interruption gates + fully streaming chain) - comes free.
-2. Measure baseline latency, then swap in Smart Turn EOU.
-3. Enable preemptive generation once EOU is trustworthy.
-4. Build the pre-rendered backchannel bank + trigger component (our code);
-   doubles as the latency-mask filler for layer 5.
+1. ~~Phase 4 baseline call with Pipecat defaults~~ **done**.
+2. ~~Measure baseline latency, then swap in Smart Turn EOU~~ **done** -
+   smart-turn v3 was already the framework default (now pinned explicitly);
+   baseline table above. Every service leg at/below budget.
+3. ~~Enable preemptive generation~~ **skipped** - first token is 60ms warm;
+   there is no LLM wait left to mask.
+4. **Backchannel bank + trigger component** **built** (2026-08-25):
+   `scripts/backchannel-bank.py` renders expressive chatterbox_turbo takes
+   into `backchannels/` (mounted read-only into the bot); `voicebot.backchannel`
+   fires clips on an energy-dip heuristic during monologues >5s
+   (`VOICEBOT_BACKCHANNEL_*` env tuning; kill switch `VOICEBOT_BACKCHANNEL=0`).
+   One clip per dip episode + cooldown; bypasses LLM+TTS entirely
+   (single pipeline hop). Upgrade path: prosody classifier replacing the
+   energy heuristic.
 5. Treat speech-to-speech as an optional study layer; revisit only when a
    trigger in its section fires.
+
+Adjacent knobs not yet exercised: barge-in threshold tuning (browser AEC is
+free; matters more for SIP), pipecat `FilterIncompleteUserTurnStrategies`
+for incomplete-utterance handling.
 
 ## Optional layer: speech-to-speech models (deferred)
 
@@ -177,6 +189,25 @@ Revisit triggers:
 3. **Ops weight.** Self-hosted LiveKit adds infra. Managed LiveKit Cloud exists
    as a fallback if self-hosting stalls.
 
+## Measured latency baseline (2026-08-25, RTX 4060 Ti, warm models)
+
+Component benchmarks via `scripts/latency-bench.sh`; live per-turn numbers
+via the bot's `UserBotLatencyObserver` (LATENCY log lines, every turn).
+
+| leg | measured | budget (layer 5) | verdict |
+|---|---|---|---|
+| STT decode - faster-whisper turbo, in-process GPU | 173ms / 2.8s utterance (16x RT) | - | realtime-grade |
+| STT batch path (Voicebox /transcribe, comparison) | ~14s round trip | - | retired |
+| LLM first token via queues proxy (Qwen3-8B, warm) | 60ms | 150-300ms | beats budget |
+| LLM 80-token stream total | 440ms | - | - |
+| TTS kokoro short / medium | 40ms / 130ms | 100-200ms | beats budget |
+
+Consequence: with every service leg at or under budget, **preemptive
+generation is skipped** - there is no LLM wait left to hide. Phase 5 effort
+goes to conversation dynamics instead: backchannel bank + trigger,
+barge-in tuning, and optionally pipecat's FilterIncompleteUserTurnStrategies
+for incomplete-utterance handling.
+
 ## Measured TTS latency (2026-08-23, RTX 4060 Ti, GPU, warm models)
 
 Via `scripts/tts-benchmark.py` against `POST /generate/stream`
@@ -207,6 +238,44 @@ Kokoro is no longer the assumed fallback.
 **STT adapter complete**: `telephony/pipecat-bot/src/voicebot/stt.py` — `VoiceboxSTTService` wraps `POST /transcribe` (batch Whisper transcription). 5 unit tests pass. Note: batch-oriented, not streaming - suitable for dictation-style use cases.
 
 **Remaining Phase 4 work**:
-- Transport integration (Daily/LiveKit/LiveKit SIP)
-- LLM integration (any Pipecat-compatible service)
-- End-to-end agent loop with VAD + turn-taking
+- ~~Transport integration (Daily/LiveKit/LiveKit SIP)~~ done: LiveKit transport
+- ~~LLM integration (any Pipecat-compatible service)~~ done: llama.cpp via OLLamaLLMService
+- ~~End-to-end agent loop with VAD + turn-taking~~ done: see README
+
+## Latency tuning round 1 (2026-08-25)
+
+Adoption-order progress against the "Conversation dynamics" section above:
+
+1. **Baseline streaming chain**: already the pipecat default shape. Done.
+2. **Smart Turn EOU**: adopted. Pipecat 1.7.0 ships smart-turn v3.2 as a
+   *bundled* ONNX model and makes it the default user-turn stop strategy
+   (`default_user_turn_stop_strategies()`). Pinned explicitly in
+   `agent.py` so the dependency stays visible.
+3. **Preemptive generation**: deferred - no framework support in pipecat
+   1.7.0 (LiveKit Agents has it; pipecat does not). Requires custom
+   partial-transcript -> LLM restart plumbing. Revisit if turn latency is
+   still above budget after measuring with the current stack.
+4. **Backchannel bank + trigger**: not started (Phase 5).
+5. **Speech-to-speech**: still deferred per triggers above.
+
+**STT moved in-process (2026-08-25)**. The batch `/transcribe` path put full
+upload + decode latency on the turn critical path, and Smart Turn's stop
+strategy waits for the final transcript before firing - so STT speed gates
+end-of-turn. Default is now pipecat's `WhisperSTTService` (faster-whisper /
+CTranslate2) running inside the bot process, GPU via optional nvidia wheels
+(preloaded through ctypes since CTranslate2 dlopens them by soname). The
+Voicebox batch adapter remains selectable via `VOICEBOT_STT_PROVIDER=voicebox`
+(useful when VRAM is tight or for CPU-only Voicebox runtimes - note upstream
+whisper small/turbo crash on `--cpu`; use `base` there).
+
+**Warm paths**: `scripts/warmup.sh` warms kokoro + whisper + llama.cpp after
+bring-up so first turns don't pay model cold-start.
+
+### llama.cpp server flags (recommended)
+
+`llama-small` (the bot's endpoint, 19091) runs CPU-resident (`-ngl 0`) by
+design - it coexists with voicebox/14B on the GPU without eviction logic.
+For that container the useful additions are `--jinja`, `--mlock`, and
+`--cache-type-k q8_0 --cache-type-v q8_0`; flash-attn only applies if a
+model is moved onto the GPU (`-ngl > 0`). Verify any flag actually engaged
+in server startup logs; llama.cpp falls back silently in some cases.

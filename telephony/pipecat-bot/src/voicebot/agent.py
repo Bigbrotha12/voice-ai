@@ -1,4 +1,4 @@
-"""Voice agent: LiveKit transport + Voicebox TTS/STT + llama.cpp LLM.
+"""Voice agent: LiveKit transport + Voicebox TTS + local faster-whisper STT + llama.cpp LLM.
 
 Pipeline (pipecat 1.7.0 turn architecture):
 
@@ -9,6 +9,13 @@ The LLMContextAggregatorPair is what turns transcriptions into LLM runs
 and bot text into context - omitting it means nothing downstream of STT
 ever fires.
 
+Latency notes (see telephony/RESEARCH.md):
+- STT defaults to in-process faster-whisper (no HTTP round trip, partials
+  available later); VOICEBOT_STT_PROVIDER=voicebox restores the batch
+  /transcribe path.
+- End-of-turn uses LocalSmartTurnAnalyzerV3 (semantic EOU, bundled with
+  pipecat and its default stop strategy - pinned here for visibility).
+
 Run:
   uv run voicebot
 
@@ -16,16 +23,25 @@ Env:
   LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_ROOM
   OLLAMA_MODEL, OLLAMA_BASE_URL (llama.cpp OpenAI-compatible endpoint)
   VOICEBOX_URL, VOICEBOX_PROFILE_ID, VOICEBOX_ENGINE
+  VOICEBOT_STT_PROVIDER, WHISPER_MODEL, WHISPER_DEVICE,
+  WHISPER_COMPUTE_TYPE, VOICEBOX_STT_MODEL
 """
 
 from __future__ import annotations
 
 import asyncio
+import ctypes
 import os
+from pathlib import Path
 
 from livekit import api
+from loguru import logger
+from datetime import datetime
+from pipecat.adapters.schemas.function_schema import FunctionSchema
+from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import LLMRunFrame
+from pipecat.observers.user_bot_latency_observer import UserBotLatencyObserver
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -34,16 +50,22 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMUserAggregatorParams,
 )
 from pipecat.processors.audio.vad_processor import VADProcessor
+from pipecat.services.mcp_service import MCPClient
 from pipecat.services.ollama.llm import OLLamaLLMService
+from pipecat.services.stt_service import STTService
+from pipecat.services.whisper.stt import WhisperSTTService
 from pipecat.transports.livekit.transport import LiveKitParams, LiveKitTransport
+from pipecat.turns.user_stop import TurnAnalyzerUserTurnStopStrategy
+from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
 
+from voicebot.backchannel import BackchannelInjectorProcessor, BackchannelTriggerProcessor, load_bank
 from voicebot.stt import VoiceboxSTTService
 from voicebot.tts import VoiceboxTTSService
 
 LIVEKIT_URL = os.getenv("LIVEKIT_URL", "ws://localhost:7880")
-LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY", "devkey")
-LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET", "secret")
+LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY", "")
+LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET", "")
 LIVEKIT_ROOM = os.getenv("LIVEKIT_ROOM", "voicebot-room")
 
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5-3b-instruct")
@@ -52,6 +74,33 @@ OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:19091/v1")
 VOICEBOX_URL = os.getenv("VOICEBOX_URL", "http://127.0.0.1:17600")
 VOICEBOX_PROFILE_ID = os.getenv("VOICEBOX_PROFILE_ID", "")
 VOICEBOX_ENGINE = os.getenv("VOICEBOX_ENGINE", "kokoro")
+
+# STT selection. "local" runs faster-whisper in this process (GPU via the
+# [gpu] extra); "voicebox" posts utterances to Voicebox's batch endpoint.
+STT_PROVIDER = os.getenv("VOICEBOT_STT_PROVIDER", "local")
+WHISPER_MODEL = os.getenv("WHISPER_MODEL", "deepdml/faster-whisper-large-v3-turbo-ct2")
+WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "auto")
+WHISPER_COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE_TYPE", "default")
+VOICEBOX_STT_MODEL = os.getenv("VOICEBOX_STT_MODEL", "turbo")
+
+# Backchannel system (RESEARCH.md layer 4). Bank dir: container mounts the
+# repo's backchannels/ at /app/bank; host-side dev runs fall back to the
+# repo-relative path.
+BACKCHANNEL_ENABLED = os.getenv("VOICEBOT_BACKCHANNEL", "1").lower() not in ("0", "false", "no")
+BANK_DIR = next(
+    (
+        p
+        for p in (os.getenv("VOICEBOT_BACKCHANNEL_BANK", "/app/bank"), "backchannels")
+        if load_bank(p)
+    ),
+    os.getenv("VOICEBOT_BACKCHANNEL_BANK", "/app/bank"),
+)
+
+# Tools: native functions + MCP servers. VOICEBOT_MCP_URLS is a comma-
+# separated list of streamable-HTTP endpoints; VOICE_MCP_AUTH_TOKEN is the
+# bearer those endpoints expect (empty = no auth, loopback-only setups).
+MCP_URLS = [u.strip() for u in os.getenv("VOICEBOT_MCP_URLS", "").split(",") if u.strip()]
+MCP_AUTH_TOKEN = os.getenv("VOICE_MCP_AUTH_TOKEN", "")
 
 SYSTEM_INSTRUCTION = (
     "You are a helpful assistant in a live voice conversation. "
@@ -78,7 +127,167 @@ def generate_token(identity: str = "voicebot") -> str:
     )
 
 
-def build_pipeline() -> tuple[Pipeline, LiveKitTransport, LLMContext]:
+def _preload_cuda_libs() -> None:
+    """Make faster-whisper GPU inference work from a plain venv.
+
+    CTranslate2 dlopens libcublas/libcudnn by soname at CUDA init; the pip
+    wheels ship them under site-packages/nvidia/*/lib, which is not on the
+    loader path. Preloading with RTLD_GLOBAL satisfies it without requiring
+    LD_LIBRARY_PATH to be set before process start. No-op when the [gpu]
+    extra is not installed (CPU-only setups).
+    """
+    try:
+        import nvidia.cublas
+        import nvidia.cudnn
+    except ImportError:
+        logger.debug("nvidia pip wheels not installed - skipping CUDA lib preload")
+        return
+
+    # Namespace packages (__file__ is None): resolve lib dirs via __path__.
+    pending: list[Path] = []
+    for module in (nvidia.cublas, nvidia.cudnn):
+        for pkg_path in module.__path__:
+            pending.extend(sorted((Path(pkg_path) / "lib").glob("lib*.so*")))
+
+    # Interdependent libs (libcublas needs libcublasLt first) may fail on an
+    # earlier pass; loop until a pass makes no progress.
+    loaded = 0
+    while pending:
+        remaining: list[Path] = []
+        progressed = False
+        for so in pending:
+            try:
+                ctypes.CDLL(str(so), mode=ctypes.RTLD_GLOBAL)
+                loaded += 1
+                progressed = True
+            except OSError as exc:
+                logger.debug(f"CUDA preload deferred {so.name}: {exc}")
+                remaining.append(so)
+        if not progressed:
+            break
+        pending = remaining
+    logger.debug(f"Preloaded CUDA libs: {loaded}")
+
+
+def build_stt() -> STTService:
+    """Build the configured STT service.
+
+    local (default): faster-whisper in this process - no HTTP round trip,
+    lowest utterance latency. voicebox: Voicebox's batch POST /transcribe
+    (shared model cache, no extra VRAM, but full-decode latency on the
+    turn critical path).
+    """
+    provider = STT_PROVIDER.strip().lower()
+    if provider == "local":
+        _preload_cuda_libs()
+        return WhisperSTTService(
+            settings=WhisperSTTService.Settings(
+                model=WHISPER_MODEL,
+                language=None,  # auto-detect
+            ),
+            device=WHISPER_DEVICE,
+            compute_type=WHISPER_COMPUTE_TYPE,
+        )
+    if provider == "voicebox":
+        return VoiceboxSTTService(
+            base_url=VOICEBOX_URL,
+            model=VOICEBOX_STT_MODEL,
+            client_id="voicebot-agent",
+        )
+    raise ValueError(
+        f"Unknown VOICEBOT_STT_PROVIDER '{provider}' (expected 'local' or 'voicebox')"
+    )
+
+
+def _native_tool_schemas() -> list[FunctionSchema]:
+    """Built-in tools that don't need an MCP server."""
+    return [
+        FunctionSchema(
+            name="get_current_time",
+            description="Get the assistant's current local date and time.",
+            properties={},
+            required=[],
+        ),
+    ]
+
+
+async def _register_native_handlers(llm: OLLamaLLMService) -> None:
+    async def get_current_time(params):
+        await params.result_callback(datetime.now().isoformat(timespec="seconds"))
+
+    llm.register_function("get_current_time", get_current_time)
+
+
+async def setup_tools(llm: OLLamaLLMService) -> tuple[list[FunctionSchema], list[MCPClient]]:
+    """Register native handlers + MCP servers; return schemas for LLMContext.
+
+    MCP servers are streamable-HTTP endpoints (VOICEBOT_MCP_URLS, comma-
+    separated). A server that's down degrades to a warning, never a crash -
+    the conversation continues with whatever tools did register.
+    """
+    schemas: list[FunctionSchema] = _native_tool_schemas()
+    await _register_native_handlers(llm)
+
+    clients: list[MCPClient] = []
+    for url in MCP_URLS:
+        from mcp.client.session_group import StreamableHttpParameters
+
+        params = StreamableHttpParameters(url=url)
+        if MCP_AUTH_TOKEN:
+            params.headers = {"Authorization": f"Bearer {MCP_AUTH_TOKEN}"}
+        client = MCPClient(server_params=params)
+        try:
+            await client.start()
+            tools = await client.register_tools(llm)
+            schemas.extend(tools.standard_tools)
+            names = [t.name for t in tools.standard_tools]
+            logger.info(f"tools: {len(names)} MCP tools from {url}: {names}")
+            clients.append(client)
+        except Exception as exc:
+            # Degrade, don't crash - but close the half-open session so we
+            # don't leak the transport.
+            try:
+                await client.close()
+            except Exception:
+                pass
+            logger.warning(f"tools: MCP server unreachable, skipping {url}: {exc}")
+
+    logger.info(f"tools: {len(schemas)} functions available to LLM")
+    return schemas, clients
+
+
+def build_latency_observer() -> UserBotLatencyObserver:
+    """Per-turn latency logging: user-stop -> bot-speech, plus service TTFBs.
+
+    Phase 5 baseline measurement (RESEARCH.md). Headline number is
+    on_latency_measured; the breakdown attributes the turn to user_turn
+    (EOU wait + STT finalization), per-service TTFB, and sentence
+    aggregation.
+    """
+    observer = UserBotLatencyObserver()
+
+    @observer.event_handler("on_latency_measured")
+    async def _measured(_, latency: float):
+        logger.info(f"LATENCY user-stop -> bot-speech: {latency:.2f}s")
+
+    @observer.event_handler("on_latency_breakdown")
+    async def _breakdown(_, b):
+        parts = []
+        if b.user_turn_secs is not None:
+            parts.append(f"user_turn {b.user_turn_secs:.2f}s")
+        for t in b.ttfb:
+            name = t.processor.split("#")[0].removesuffix("Service")
+            parts.append(f"{name} ttfb {t.duration_secs:.2f}s")
+        if b.text_aggregation:
+            parts.append(f"agg {b.text_aggregation.duration_secs:.2f}s")
+        for fc in b.function_calls:
+            parts.append(f"{fc.function_name} {fc.duration_secs:.2f}s")
+        logger.info("LATENCY breakdown: " + " | ".join(parts))
+
+    return observer
+
+
+async def build_pipeline() -> tuple[Pipeline, LiveKitTransport, LLMContext, list[MCPClient]]:
     if not VOICEBOX_PROFILE_ID:
         raise ValueError("VOICEBOX_PROFILE_ID env var required")
 
@@ -94,11 +303,7 @@ def build_pipeline() -> tuple[Pipeline, LiveKitTransport, LLMContext]:
         ),
     )
 
-    stt = VoiceboxSTTService(
-        base_url=VOICEBOX_URL,
-        model="turbo",
-        client_id="voicebot-agent",
-    )
+    stt = build_stt()
 
     llm = OLLamaLLMService(
         base_url=OLLAMA_BASE_URL,
@@ -115,35 +320,69 @@ def build_pipeline() -> tuple[Pipeline, LiveKitTransport, LLMContext]:
         client_id="voicebot-agent",
     )
 
-    context = LLMContext()
+    tool_schemas, mcp_clients = await setup_tools(llm)
+    context = LLMContext(tools=tool_schemas)
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
-        user_params=LLMUserAggregatorParams(),
+        user_params=LLMUserAggregatorParams(
+            user_turn_strategies=UserTurnStrategies(
+                # LocalSmartTurnAnalyzerV3 is already pipecat's default stop
+                # strategy; pinned here so the semantic-EOU dependency is
+                # visible and swappable (RESEARCH.md layer 2). It decides
+                # completion from audio, then waits for the final transcript -
+                # which is why in-process STT matters for turn latency.
+                stop=[TurnAnalyzerUserTurnStopStrategy(turn_analyzer=LocalSmartTurnAnalyzerV3())],
+            ),
+        ),
     )
+
+    audio_out_rate = 24000
+    backchannel_input: list = []
+    backchannel_output: list = []
+    if BACKCHANNEL_ENABLED:
+        # Layer 4: pre-rendered acknowledgments during long user monologues.
+        # Trigger rides the input path (audio energy + VAD state); injector
+        # sits right before output and swaps BackchannelFrame -> raw PCM,
+        # bypassing LLM+TTS entirely.
+        trigger = BackchannelTriggerProcessor(bank_dir=BANK_DIR)
+        injector = BackchannelInjectorProcessor(sample_rate=audio_out_rate)
+        if trigger.enabled:
+            logger.info(f"backchannel: {trigger.clip_count} clips from {BANK_DIR}")
+            backchannel_input.append(trigger)
+            backchannel_output.append(injector)
+        else:
+            logger.info("backchannel: bank empty, disabled")
 
     pipeline = Pipeline(
         [
             transport.input(),
             VADProcessor(vad_analyzer=SileroVADAnalyzer()),
+            *backchannel_input,
             stt,
             user_aggregator,
             llm,
             tts,
+            *backchannel_output,
             transport.output(),
             assistant_aggregator,
         ]
     )
 
-    return pipeline, transport, context
+    return pipeline, transport, context, mcp_clients
 
 
 async def main():
-    pipeline, transport, context = build_pipeline()
+    pipeline, transport, context, mcp_clients = await build_pipeline()
 
     worker = PipelineWorker(
         pipeline,
         params=PipelineParams(enable_metrics=True, enable_usage_metrics=True),
+        # Framework default is 300s: idle cancel kills the runner -> container
+        # exit -> podman restart churn. 30min keeps the bot resident between
+        # conversations.
+        idle_timeout_secs=1800,
     )
+    worker.add_observer(build_latency_observer())
 
     @transport.event_handler("on_participant_connected")
     async def on_participant_connected(transport, participant_id: str):
@@ -151,20 +390,35 @@ async def main():
 
     @transport.event_handler("on_participant_disconnected")
     async def on_participant_disconnected(transport, participant_id: str):
+        # No worker.cancel() here: the idle timeout (1800s) owns teardown.
+        # Cancelling on empty-room races quick reconnects (refresh/ICE
+        # restart) and recycles the container after every goodbye.
         print(f"Participant disconnected: {participant_id}")
-        if not transport.get_participants():
-            await worker.cancel()
+
+    if not LIVEKIT_API_KEY or not LIVEKIT_API_SECRET:
+        raise SystemExit(
+            "LIVEKIT_API_KEY / LIVEKIT_API_SECRET missing - configured-keys "
+            "LiveKit mode has no defaults (see .env.example)"
+        )
 
     print(f"Voice agent joining '{LIVEKIT_ROOM}' @ {LIVEKIT_URL}")
     print(f"LLM: {OLLAMA_MODEL} @ {OLLAMA_BASE_URL}")
-    print(f"Voicebox: {VOICEBOX_URL} ({VOICEBOX_ENGINE})")
+    print(f"TTS: Voicebox @ {VOICEBOX_URL} ({VOICEBOX_ENGINE})")
+    print(f"STT: {STT_PROVIDER} (model={WHISPER_MODEL if STT_PROVIDER == 'local' else VOICEBOX_STT_MODEL})")
 
     context.add_message({"role": "developer", "content": SYSTEM_INSTRUCTION})
     await worker.queue_frames([LLMRunFrame()])
 
-    runner = WorkerRunner()
-    await runner.add_workers(worker)
-    await runner.run()
+    try:
+        runner = WorkerRunner()
+        await runner.add_workers(worker)
+        await runner.run()
+    finally:
+        for client in mcp_clients:
+            try:
+                await client.close()
+            except Exception:
+                pass
 
 
 def run():

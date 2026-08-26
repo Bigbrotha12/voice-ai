@@ -1,0 +1,36 @@
+# Token minter for browser/mobile voice clients: exchanges identity+room for
+# a short-lived LiveKit room JWT so no client ever holds the API secret.
+# Loaded by scripts/stack-up.sh.
+#
+# Loopback-only publish by default; the Flutter app will reach it over
+# LAN/Tailscale deliberately. Optional TOKEN_MINT_SHARED_SECRET adds a
+# bearer check in front of minting.
+services:
+  token-mint:
+    build:
+      context: ${REPO_ROOT}/services/token-mint
+      dockerfile: Containerfile
+    container_name: token-mint
+    restart: unless-stopped
+    environment:
+      - LIVEKIT_URL=${LIVEKIT_URL:-ws://localhost:7880}
+      # Client-facing URL (what browsers dial); inside the compose network
+      # the host-published port is localhost, but remote clients need the
+      # host's address - keep host-facing value from .env.
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
+      - LIVEKIT_ROOM=${LIVEKIT_ROOM:-voicebot-room}
+      - TOKEN_MINT_SHARED_SECRET=${TOKEN_MINT_SHARED_SECRET:-}
+      - TOKEN_MINT_HOST=0.0.0.0
+      - TOKEN_MINT_PORT=17602
+    ports:
+      - "127.0.0.1:17602:17602"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request as u; u.urlopen('http://127.0.0.1:17602/healthz', timeout=3)"
+      interval: 30s
+      timeout: 5s
+      retries: 3

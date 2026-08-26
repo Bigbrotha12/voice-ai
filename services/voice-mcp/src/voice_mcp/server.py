@@ -11,6 +11,7 @@ Tools:
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 from typing import Any
 
@@ -26,9 +27,8 @@ from .voicebox_client import (
     extract_generation_id,
 )
 
-KNOWN_ENGINES = (
-    "qwen, qwen_custom_voice, luxtts, chatterbox, chatterbox_turbo, tada, kokoro"
-)
+# Engine names live in AGENTS.md as a soft list - the wrapper accepts any
+# string so new upstream engines don't get rejected.
 
 mcp = FastMCP("voice-agent")
 
@@ -150,7 +150,64 @@ async def voices() -> dict[str, Any]:
 
 
 def main() -> None:
-    mcp.run()
+    transport = os.environ.get("VOICE_MCP_TRANSPORT", "stdio").lower()
+    if transport == "stdio":
+        mcp.run()
+        return
+    _run_http()
+
+
+def _run_http() -> None:
+    """HTTP (streamable) transport with bearer-token auth.
+
+    Binds 0.0.0.0 by default so podman containers can reach the host
+    gateway. FAIL CLOSED: a non-loopback bind without VOICE_MCP_AUTH_TOKEN
+    refuses to start - the endpoint exposes mic capture and arbitrary TTS.
+    """
+    import secrets as _secrets
+
+    import uvicorn
+    from starlette.applications import Starlette
+    from starlette.responses import JSONResponse
+
+    token = os.environ.get("VOICE_MCP_AUTH_TOKEN", "")
+    host = os.environ.get("VOICE_MCP_HOST", "127.0.0.1")
+    port = int(os.environ.get("VOICE_MCP_PORT", "17601"))
+
+    if host not in ("127.0.0.1", "localhost", "::1") and not token:
+        raise SystemExit(
+            f"voice-mcp: refusing to bind {host} without VOICE_MCP_AUTH_TOKEN "
+            "(endpoint exposes mic capture + playback; fail closed)"
+        )
+
+    class BearerAuthMiddleware:
+        """Pure ASGI (not BaseHTTPMiddleware): streamable-HTTP keeps a
+        long-lived SSE channel open per session; the buffered middleware
+        variant is a known source of hung streams."""
+
+        def __init__(self, app, expected: str):
+            self.app = app
+            self._expected = f"Bearer {expected}".encode()
+
+        async def __call__(self, scope, receive, send):
+            if scope["type"] == "http" and self._expected:
+                headers = {k.lower(): v for k, v in scope.get("headers") or []}
+                supplied = headers.get(b"authorization", b"")
+                if not _secrets.compare_digest(supplied, self._expected):
+                    resp = JSONResponse({"error": "unauthorized"}, status_code=401)
+                    await resp(scope, receive, send)
+                    return
+            await self.app(scope, receive, send)
+
+    mcp_app = mcp.http_app(path="/mcp")
+    app = Starlette(
+        routes=[],
+        lifespan=mcp_app.router.lifespan_context,
+    )
+    app.add_middleware(BearerAuthMiddleware, expected=token)
+    app.mount("/", mcp_app)
+
+    uvicorn.run(app, host=host, port=port, log_level="info")
 
 
 if __name__ == "__main__":

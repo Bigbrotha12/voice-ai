@@ -14,6 +14,7 @@ Two latency gotchas handled here:
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import tempfile
@@ -75,7 +76,11 @@ def _warmup_clip() -> Path | None:
     ffmpeg = shutil.which("ffmpeg")
     if ffmpeg is None:
         return None
-    path = Path(tempfile.gettempdir()) / f"voice-mcp-warmup-{WARMUP_SILENCE_SECONDS}s.wav"
+    # Private temp file (mkstemp): a fixed /tmp path is a symlink/squatting
+    # target on multi-user hosts.
+    fd, path_str = tempfile.mkstemp(prefix="voice-mcp-warmup-", suffix=".wav")
+    os.close(fd)
+    path = Path(path_str)
     ok, _ = _run([
         ffmpeg, "-loglevel", "error", "-y",
         "-f", "lavfi", "-i", f"anullsrc=r=44100:cl=mono",

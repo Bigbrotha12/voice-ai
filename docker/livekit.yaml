@@ -1,0 +1,10 @@
+# LiveKit single-node production-style config (replaces --dev mode).
+# NOTE: credentials are NOT here - livekit's ${VAR} config expansion is
+# unreliable; they arrive via the LIVEKIT_KEYS env var (see livekit.yml),
+# which compose substitutes reliably.
+port: 7880
+bind_addresses:
+  - "0.0.0.0"
+rtc:
+  tcp_port: 7881
+  use_external_ip: false
