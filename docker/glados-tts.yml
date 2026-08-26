@@ -1,0 +1,30 @@
+# Host-side glados-tts (persistent piper session). mirrors the whisper-stt
+# pattern: podman host, no GPU needed, loopback only.
+#
+# Requires the image to be built first:
+#   cd ~/Projects/mcp/glados-tts && podman build -t localhost/glados-tts:k3s .
+#
+# Voice models live at $VOICE_MODEL_DIR (default: ~/Projects/mcp/glados-tts-models).
+services:
+  glados-tts:
+    image: localhost/glados-tts:k3s
+    container_name: glados-tts-host
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5001:5000"
+    user: "1000:1000"
+    environment:
+      - DATA_DIR=/data
+      - VOICE=en_US-glados-high
+    volumes:
+      - "${VOICE_MODEL_DIR:-/home/bigbrotha/Projects/mcp/glados-tts-models}:/data:ro,Z"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request as u; u.urlopen('http://127.0.0.1:5000/v1/audio/speech', timeout=3)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
