@@ -1,6 +1,8 @@
 # Telephony implementation plan (Phase 6)
 
-Status: planned. Prereqs done: agent core runs on LiveKit transport
+Status: **tabled 2026-08-26** - voicebot ships as-is; near-term priority is
+k3s packaging with the data-only path (LiveKit/WebRTC clients, MCP
+interconnect), no PSTN. Prereqs done: agent core runs on LiveKit transport
 (`telephony/pipecat-bot/`), every service leg realtime-grade
 (`RESEARCH.md` latency tables). Nothing SIP-related exists yet.
 
