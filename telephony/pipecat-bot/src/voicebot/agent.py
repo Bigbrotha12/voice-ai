@@ -200,7 +200,7 @@ MCP_AUTH_TOKEN = os.getenv("VOICE_MCP_AUTH_TOKEN", "")
 SYSTEM_INSTRUCTION = (
     "You are a helpful assistant in a live voice conversation. "
     "Your responses are spoken aloud, so keep them brief and conversational - "
-    "no emojis, lists, or markdown."
+    "no emojis, lists, or markdown.\n/no_think"
 )
 
 
