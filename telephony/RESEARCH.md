@@ -208,6 +208,21 @@ goes to conversation dynamics instead: backchannel bank + trigger,
 barge-in tuning, and optionally pipecat's FilterIncompleteUserTurnStrategies
 for incomplete-utterance handling.
 
+## Cluster voice services probe (2026-08-26, data-only k3s path)
+
+Via `scripts/cluster-voice-test.sh --probe-only` (kubectl port-forward,
+closed loop: glados-tts output feeds whisper-stt input). Warm steady-state:
+
+| leg | measured | budget | verdict |
+|---|---|---|---|
+| TTS glados-tts (piper CPU, current image incl. mp3 transcode) | ~1000ms | 300ms | over - wav response_format path skips the transcode; in-cluster hop removes the forward |
+| STT whisper-stt (small.en int8 CPU, 2s utterance) | ~815ms | 600ms | near - model-size/thread tuning or in-cluster placement |
+
+Batch round-trips put full service legs at ~1.8s vs 0.21s GPU baseline -
+demo-grade turn-taking, not conversational. Revisit after glados-tts
+response_format deploy and/or moving the bot into the cluster (no
+port-forward, ServiceEntry-free same-namespace hops).
+
 ## Measured TTS latency (2026-08-23, RTX 4060 Ti, GPU, warm models)
 
 Via `scripts/tts-benchmark.py` against `POST /generate/stream`

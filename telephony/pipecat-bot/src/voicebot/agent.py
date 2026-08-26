@@ -1,4 +1,4 @@
-"""Voice agent: LiveKit transport + Voicebox TTS + local faster-whisper STT + llama.cpp LLM.
+"""Voice agent: LiveKit transport + pluggable TTS/STT + llama.cpp LLM.
 
 Pipeline (pipecat 1.7.0 turn architecture):
 
@@ -23,8 +23,11 @@ Env:
   LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_ROOM
   OLLAMA_MODEL, OLLAMA_BASE_URL (llama.cpp OpenAI-compatible endpoint)
   VOICEBOX_URL, VOICEBOX_PROFILE_ID, VOICEBOX_ENGINE
-  VOICEBOT_STT_PROVIDER, WHISPER_MODEL, WHISPER_DEVICE,
-  WHISPER_COMPUTE_TYPE, VOICEBOX_STT_MODEL
+  VOICEBOT_STT_PROVIDER (local|voicebox|openai), WHISPER_MODEL,
+  WHISPER_DEVICE, WHISPER_COMPUTE_TYPE, VOICEBOX_STT_MODEL,
+  OPENAI_STT_BASE_URL, OPENAI_STT_MODEL
+  VOICEBOT_TTS_PROVIDER (voicebox|piper), PIPER_TTS_BASE_URL,
+  PIPER_VOICE, PIPER_SPEED
 """
 
 from __future__ import annotations
@@ -60,6 +63,8 @@ from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
 
 from voicebot.backchannel import BackchannelInjectorProcessor, BackchannelTriggerProcessor, load_bank
+from voicebot.openai_batch_stt import OpenAIBatchSTTService
+from voicebot.piper_tts import PiperTTSService
 from voicebot.stt import VoiceboxSTTService
 from voicebot.tts import VoiceboxTTSService
 
@@ -76,12 +81,23 @@ VOICEBOX_PROFILE_ID = os.getenv("VOICEBOX_PROFILE_ID", "")
 VOICEBOX_ENGINE = os.getenv("VOICEBOX_ENGINE", "kokoro")
 
 # STT selection. "local" runs faster-whisper in this process (GPU via the
-# [gpu] extra); "voicebox" posts utterances to Voicebox's batch endpoint.
+# [gpu] extra); "voicebox" posts utterances to Voicebox's batch endpoint;
+# "openai" posts to any OpenAI-compatible /v1/audio/transcriptions service
+# (whisper-stt in the k3s productivity namespace, or OpenAI itself).
 STT_PROVIDER = os.getenv("VOICEBOT_STT_PROVIDER", "local")
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "deepdml/faster-whisper-large-v3-turbo-ct2")
 WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "auto")
 WHISPER_COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE_TYPE", "default")
 VOICEBOX_STT_MODEL = os.getenv("VOICEBOX_STT_MODEL", "turbo")
+OPENAI_STT_BASE_URL = os.getenv("OPENAI_STT_BASE_URL", "http://127.0.0.1:8000")
+OPENAI_STT_MODEL = os.getenv("OPENAI_STT_MODEL", "whisper-1")
+
+# TTS selection. "voicebox" (default) uses Voicebox profiles; "piper" uses
+# the glados-tts service (OpenAI-speech-shaped, wav requested explicitly).
+TTS_PROVIDER = os.getenv("VOICEBOT_TTS_PROVIDER", "voicebox")
+PIPER_TTS_BASE_URL = os.getenv("PIPER_TTS_BASE_URL", "http://127.0.0.1:5000")
+PIPER_VOICE = os.getenv("PIPER_VOICE", "en_US-glados-high")
+PIPER_SPEED = float(os.getenv("PIPER_SPEED", "1.0"))
 
 # Backchannel system (RESEARCH.md layer 4). Bank dir: container mounts the
 # repo's backchannels/ at /app/bank; host-side dev runs fall back to the
@@ -175,7 +191,8 @@ def build_stt() -> STTService:
     local (default): faster-whisper in this process - no HTTP round trip,
     lowest utterance latency. voicebox: Voicebox's batch POST /transcribe
     (shared model cache, no extra VRAM, but full-decode latency on the
-    turn critical path).
+    turn critical path). openai: OpenAI-compatible batch transcriptions
+    (whisper-stt service; same batch trade-off, one fast in-mesh hop).
     """
     provider = STT_PROVIDER.strip().lower()
     if provider == "local":
@@ -194,8 +211,41 @@ def build_stt() -> STTService:
             model=VOICEBOX_STT_MODEL,
             client_id="voicebot-agent",
         )
+    if provider == "openai":
+        return OpenAIBatchSTTService(
+            base_url=OPENAI_STT_BASE_URL,
+            model=OPENAI_STT_MODEL,
+        )
     raise ValueError(
-        f"Unknown VOICEBOT_STT_PROVIDER '{provider}' (expected 'local' or 'voicebox')"
+        f"Unknown VOICEBOT_STT_PROVIDER '{provider}' "
+        "(expected 'local', 'voicebox' or 'openai')"
+    )
+
+
+def build_tts():
+    """Build the configured TTS service.
+
+    voicebox (default): Voicebox profiles via POST /generate/stream.
+    piper: glados-tts service via /v1/audio/speech with response_format=wav;
+    frames leave the adapter at the file's native rate and the transport
+    resamples to audio_out_sample_rate.
+    """
+    provider = TTS_PROVIDER.strip().lower()
+    if provider == "voicebox":
+        return VoiceboxTTSService(
+            base_url=VOICEBOX_URL,
+            profile_id=VOICEBOX_PROFILE_ID,
+            engine=VOICEBOX_ENGINE,
+            client_id="voicebot-agent",
+        )
+    if provider == "piper":
+        return PiperTTSService(
+            base_url=PIPER_TTS_BASE_URL,
+            voice=PIPER_VOICE,
+            speed=PIPER_SPEED,
+        )
+    raise ValueError(
+        f"Unknown VOICEBOT_TTS_PROVIDER '{provider}' (expected 'voicebox' or 'piper')"
     )
 
 
@@ -288,8 +338,9 @@ def build_latency_observer() -> UserBotLatencyObserver:
 
 
 async def build_pipeline() -> tuple[Pipeline, LiveKitTransport, LLMContext, list[MCPClient]]:
-    if not VOICEBOX_PROFILE_ID:
-        raise ValueError("VOICEBOX_PROFILE_ID env var required")
+    tts_provider = TTS_PROVIDER.strip().lower()
+    if tts_provider == "voicebox" and not VOICEBOX_PROFILE_ID:
+        raise ValueError("VOICEBOX_PROFILE_ID env var required for voicebox TTS")
 
     transport = LiveKitTransport(
         url=LIVEKIT_URL,
@@ -304,6 +355,7 @@ async def build_pipeline() -> tuple[Pipeline, LiveKitTransport, LLMContext, list
     )
 
     stt = build_stt()
+    tts = build_tts()
 
     llm = OLLamaLLMService(
         base_url=OLLAMA_BASE_URL,
@@ -311,13 +363,6 @@ async def build_pipeline() -> tuple[Pipeline, LiveKitTransport, LLMContext, list
             model=OLLAMA_MODEL,
             system_instruction=SYSTEM_INSTRUCTION,
         ),
-    )
-
-    tts = VoiceboxTTSService(
-        base_url=VOICEBOX_URL,
-        profile_id=VOICEBOX_PROFILE_ID,
-        engine=VOICEBOX_ENGINE,
-        client_id="voicebot-agent",
     )
 
     tool_schemas, mcp_clients = await setup_tools(llm)
@@ -403,8 +448,16 @@ async def main():
 
     print(f"Voice agent joining '{LIVEKIT_ROOM}' @ {LIVEKIT_URL}")
     print(f"LLM: {OLLAMA_MODEL} @ {OLLAMA_BASE_URL}")
-    print(f"TTS: Voicebox @ {VOICEBOX_URL} ({VOICEBOX_ENGINE})")
-    print(f"STT: {STT_PROVIDER} (model={WHISPER_MODEL if STT_PROVIDER == 'local' else VOICEBOX_STT_MODEL})")
+    if TTS_PROVIDER.strip().lower() == "piper":
+        print(f"TTS: piper/glados-tts @ {PIPER_TTS_BASE_URL} (voice={PIPER_VOICE})")
+    else:
+        print(f"TTS: Voicebox @ {VOICEBOX_URL} ({VOICEBOX_ENGINE})")
+    if STT_PROVIDER.strip().lower() == "openai":
+        print(f"STT: openai-batch @ {OPENAI_STT_BASE_URL} (model={OPENAI_STT_MODEL})")
+    elif STT_PROVIDER.strip().lower() == "voicebox":
+        print(f"STT: voicebox batch @ {VOICEBOX_URL} (model={VOICEBOX_STT_MODEL})")
+    else:
+        print(f"STT: local faster-whisper (model={WHISPER_MODEL}, device={WHISPER_DEVICE})")
 
     context.add_message({"role": "developer", "content": SYSTEM_INSTRUCTION})
     await worker.queue_frames([LLMRunFrame()])

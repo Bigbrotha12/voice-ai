@@ -35,6 +35,14 @@ A complete Pipecat voice agent with Voicebox as the TTS backend, faster-whisper
   - llama.cpp LLM (OpenAI-compatible endpoint)
   - Silero VAD (built into Pipecat)
 
+- **Cluster providers (data-only k3s path)** — `OpenAIBatchSTTService`
+  (`src/voicebot/openai_batch_stt.py`, any OpenAI-compatible
+  `/v1/audio/transcriptions`) and `PiperTTSService`
+  (`src/voicebot/piper_tts.py`, glados-tts `/v1/audio/speech` with
+  `response_format=wav`). Select with `VOICEBOT_STT_PROVIDER=openai` /
+  `VOICEBOT_TTS_PROVIDER=piper`. Launch + latency probes:
+  `scripts/cluster-voice-test.sh` (measured numbers in RESEARCH.md).
+
 ## Quick start
 
 ### Prerequisites
