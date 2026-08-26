@@ -1,0 +1,63 @@
+# Combined voicebot services: GPU whisper-stt + persistent piper TTS.
+# Single stack — both must be up for the bot to function.
+#
+# Usage:
+#   docker compose -f docker/voicebot-stack.yml up -d
+#   docker compose -f docker/voicebot-stack.yml down
+#
+# Build whisper-stt image:
+#   podman build -t localhost/whisper-stt:k3s whisper-stt/
+#
+# Build glados-tts image:
+#   podman build -t localhost/glados-tts:k3s ~/Projects/mcp/glados-tts/
+services:
+  whisper-stt:
+    build:
+      context: ../whisper-stt
+      dockerfile: Dockerfile
+    container_name: whisper-stt
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8001:8000"
+    environment:
+      - WHISPER_MODEL=deepdml/faster-whisper-large-v3-turbo-ct2
+      - WHISPER_DEVICE=cuda
+      - WHISPER_COMPUTE_TYPE=float16
+    user: "0:0"
+    devices:
+      - "nvidia.com/gpu=all"
+    security_opt:
+      - "label=disable"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/healthz', timeout=3)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 120s
+
+  glados-tts:
+    image: localhost/glados-tts:k3s
+    container_name: glados-tts-host
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5001:5000"
+    user: "1000:1000"
+    environment:
+      - DATA_DIR=/data
+      - VOICE=en_US-glados-high
+    volumes:
+      - "${VOICE_MODEL_DIR:-/home/bigbrotha/Projects/mcp/glados-tts-models}:/data:ro,Z"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request as u; u.urlopen('http://127.0.0.1:5000/healthz', timeout=3)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s

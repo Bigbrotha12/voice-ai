@@ -2,20 +2,18 @@
 """Pre-render the backchannel clip bank (RESEARCH.md layer 4).
 
 Generates short acknowledgment clips ("mm-hmm", "right", "go on", ...) per
-voice profile via Voicebox's /generate/stream using chatterbox_turbo -
-its paralinguistic tags ([laugh]/[sigh]) give expressive variants the live
-path cannot produce at conversational latency.
+voice profile via Voicebox's /generate/stream.
 
 Output: BANK_DIR/<phrase>__take<N>.wav, mono s16le 24kHz - consumed by
-voicebot.backchannel.BackchannelInjectorProcessor. The repo's backchannels/
-dir is mounted read-only into the bot container (docker/voicebot.yml).
+voicebot.backchannel.BackchannelInjectorProcessor.
 
 A .meta.json sentinel is written after successful generation so the bot
 can detect stale banks (profile changed) and regenerate automatically.
 
 Usage:
-  ./scripts/backchannel-bank.py                     # default profile probing
-  ./scripts/backchannel-bank.py --profile "Benchmark Clone" --takes 2
+  ./scripts/backchannel-bank.py                          # kokoro, default profile
+  ./scripts/backchannel-bank.py --engine kokoro --profile "Bella"
+  ./scripts/backchannel-bank.py --engine chatterbox_turbo --profile "Benchmark Clone"
   ./scripts/backchannel-bank.py --profile-id abc123 --force
 """
 
@@ -35,11 +33,13 @@ from pathlib import Path
 import httpx
 
 BASE_URL = os.environ.get("VOICEBOX_URL", "http://127.0.0.1:17600").rstrip("/")
-ENGINE = "chatterbox_turbo"
 BANK_DIR = Path(os.environ.get("VOICEBOT_BACKCHANNEL_BANK", "backchannels"))
 CLIENT_ID = "backchannel-bank"
 
-# phrase -> renderings; [laugh]/[sigh] are chatterbox_turbo paralinguistic tags
+# Paralinguistic tags — only supported by chatterbox_turbo.
+_TAG_RE = __import__("re").compile(r"\[laugh\]|\[sigh\]", __import__("re").IGNORECASE)
+
+# Base phrases; tags are stripped for engines that don't support them.
 PHRASES = [
     "mm-hmm",
     "mm-hmm [sigh]",
@@ -80,12 +80,12 @@ def normalize_to_s16_mono_24k(wav_bytes: bytes) -> bytes:
     return buf.getvalue()
 
 
-async def _probe(client: httpx.AsyncClient, pid: str) -> bool:
+async def _probe(client: httpx.AsyncClient, pid: str, engine: str) -> bool:
     try:
         async with client.stream(
             "POST",
             "/generate/stream",
-            json={"text": ".", "profile_id": pid, "engine": ENGINE},
+            json={"text": ".", "profile_id": pid, "engine": engine},
             headers={"X-Voicebox-Client-Id": CLIENT_ID},
         ) as r:
             return r.status_code == 200
@@ -93,17 +93,17 @@ async def _probe(client: httpx.AsyncClient, pid: str) -> bool:
         return False
 
 
-async def _ensure_model(client: httpx.AsyncClient, pid: str) -> None:
-    """Trigger chatterbox_turbo download via /generate (stream refuses while
-    downloading), poll until done."""
+async def _ensure_model(client: httpx.AsyncClient, pid: str, engine: str) -> None:
+    """Trigger model download via /generate (stream refuses while downloading),
+    poll until done."""
     gen = await client.post(
         "/generate",
-        json={"text": "Testing.", "profile_id": pid, "engine": ENGINE},
+        json={"text": "Testing.", "profile_id": pid, "engine": engine},
         headers={"X-Voicebox-Client-Id": CLIENT_ID},
     )
     gen.raise_for_status()
     gen_id = gen.json()["id"]
-    print(f"downloading/loading {ENGINE} model (gen {gen_id})...", flush=True)
+    print(f"downloading/loading {engine} model (gen {gen_id})...", flush=True)
     deadline = asyncio.get_event_loop().time() + 1800
     while asyncio.get_event_loop().time() < deadline:
         status = (await client.get(f"/history/{gen_id}")).json().get("status")
@@ -115,7 +115,7 @@ async def _ensure_model(client: httpx.AsyncClient, pid: str) -> None:
     raise SystemExit("bootstrap timed out after 30 min")
 
 
-async def pick_profile(client: httpx.AsyncClient, name: str | None, profile_id: str | None) -> tuple[str, str]:
+async def pick_profile(client: httpx.AsyncClient, name: str | None, profile_id: str | None, engine: str) -> tuple[str, str]:
     """Return (profile_id, profile_name) for the selected profile.
 
     *profile_id* takes precedence over *name* when both are given.
@@ -137,12 +137,11 @@ async def pick_profile(client: httpx.AsyncClient, name: str | None, profile_id: 
                 return p["id"], p.get("name", name)
         raise SystemExit(f"profile '{name}' not found")
 
-    # chatterbox_turbo is a cloning engine: preset profiles are kokoro-only.
     # Try clone-named profiles first, then everything else.
     ordered = [p for p in profiles if "clone" in p.get("name", "").lower()]
     ordered += [p for p in profiles if p not in ordered]
     for p in ordered:
-        if await _probe(client, p["id"]):
+        if await _probe(client, p["id"], engine):
             return p["id"], p.get("name", p["id"])
 
     # All probes failed - the model may not be downloaded yet. Bootstrap on
@@ -150,29 +149,44 @@ async def pick_profile(client: httpx.AsyncClient, name: str | None, profile_id: 
     target = ordered[0] if ordered else None
     if not target:
         raise SystemExit("no voice profiles found - create one first")
-    await _ensure_model(client, target["id"])
-    if await _probe(client, target["id"]):
+    await _ensure_model(client, target["id"], engine)
+    if await _probe(client, target["id"], engine):
         return target["id"], target.get("name", target["id"])
-    raise SystemExit("no profile accepted chatterbox_turbo after bootstrap")
+    raise SystemExit(f"no profile accepted {engine} after bootstrap")
 
 
 async def main() -> None:
     ap = argparse.ArgumentParser()
+    ap.add_argument("--engine", default="kokoro", help="TTS engine (default: kokoro)")
     ap.add_argument("--profile", default=None, help="profile name (default: probe)")
     ap.add_argument("--profile-id", default=None, help="profile id (overrides --profile)")
     ap.add_argument("--takes", type=int, default=2, help="takes per phrase variant")
     ap.add_argument("--force", action="store_true", help="re-render existing clips")
     args = ap.parse_args()
 
+    engine = args.engine.strip().lower()
+    has_tags = engine not in ("chatterbox", "chatterbox_turbo")
+
+    # Strip paralinguistic tags for engines that don't support them.
+    phrases = [_TAG_RE.sub("", p).strip() for p in PHRASES] if has_tags else list(PHRASES)
+    # Deduplicate while preserving order.
+    seen: set[str] = set()
+    unique_phrases: list[str] = []
+    for p in phrases:
+        if p not in seen:
+            seen.add(p)
+            unique_phrases.append(p)
+    phrases = unique_phrases
+
     BANK_DIR.mkdir(parents=True, exist_ok=True)
     async with httpx.AsyncClient(base_url=BASE_URL, timeout=httpx.Timeout(300)) as client:
-        profile_id, profile_name = await pick_profile(client, args.profile, args.profile_id)
-        print(f"profile: {profile_name} ({profile_id})")
+        profile_id, profile_name = await pick_profile(client, args.profile, args.profile_id, engine)
+        print(f"profile: {profile_name} ({profile_id}) engine: {engine}")
 
         rendered = skipped = failed = 0
-        for phrase in PHRASES:
+        for phrase in phrases:
             for take in range(1, args.takes + 1):
-                stem = phrase.replace("[", "").replace("]", "").strip().replace(" ", "-").rstrip("-.")
+                stem = phrase.replace(" ", "-").rstrip("-.")
                 out = BANK_DIR / f"{stem}__t{take}.wav"
                 if out.exists() and not args.force:
                     skipped += 1
@@ -181,7 +195,7 @@ async def main() -> None:
                     async with client.stream(
                         "POST",
                         "/generate/stream",
-                        json={"text": phrase, "profile_id": profile_id, "engine": ENGINE},
+                        json={"text": phrase, "profile_id": profile_id, "engine": engine},
                         headers={"X-Voicebox-Client-Id": CLIENT_ID},
                     ) as resp:
                         if resp.status_code != 200:
@@ -201,7 +215,7 @@ async def main() -> None:
 
         # Write sentinel so the bot can detect stale banks.
         meta = {
-            "engine": ENGINE,
+            "engine": engine,
             "profile_id": profile_id,
             "profile_name": profile_name,
             "generated_at": datetime.now(timezone.utc).isoformat(),

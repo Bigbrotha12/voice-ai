@@ -54,6 +54,7 @@ from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
+    LLMAssistantAggregatorParams,
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
 )
@@ -478,6 +479,9 @@ async def build_pipeline() -> tuple[Pipeline, LiveKitTransport, LLMContext, list
                 # which is why in-process STT matters for turn latency.
                 stop=[TurnAnalyzerUserTurnStopStrategy(turn_analyzer=LocalSmartTurnAnalyzerV3())],
             ),
+        ),
+        assistant_params=LLMAssistantAggregatorParams(
+            enable_auto_context_summarization=True,
         ),
     )
 
