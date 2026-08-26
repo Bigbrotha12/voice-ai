@@ -215,13 +215,17 @@ closed loop: glados-tts output feeds whisper-stt input). Warm steady-state:
 
 | leg | measured | budget | verdict |
 |---|---|---|---|
-| TTS glados-tts (piper CPU, current image incl. mp3 transcode) | ~1000ms | 300ms | over - wav response_format path skips the transcode; in-cluster hop removes the forward |
-| STT whisper-stt (small.en int8 CPU, 2s utterance) | ~815ms | 600ms | near - model-size/thread tuning or in-cluster placement |
+| TTS glados-tts (piper CPU, wav response_format live) | ~1000-1150ms | 300ms | over - piper subprocess dominates; transcode was not the cost |
+| STT whisper-stt (small.en int8 CPU, 2s utterance) | ~730-860ms | 600ms | near - model-size/thread tuning or in-cluster placement |
 
-Batch round-trips put full service legs at ~1.8s vs 0.21s GPU baseline -
-demo-grade turn-taking, not conversational. Revisit after glados-tts
-response_format deploy and/or moving the bot into the cluster (no
-port-forward, ServiceEntry-free same-namespace hops).
+End-to-end single turn via room driver (2026-08-26): **user-stop →
+bot-speech 2.12s** = user_turn 0.93s (batch STT + EOU) + LLM ttfb 0.15s +
+Piper ttfb ~1.0s. Long-monologue driving shows the known batch pathology:
+transcripts land after smart-turn fires on clause dips -> early/misaligned
+turn releases and repeated LLM runs (13 TTS gens in one 26.6s monologue).
+Verdict: works as data-only demo path; conversational-grade needs faster
+STT/TTS legs (in-cluster hop, piper warm process, smaller/faster whisper
+model) or Voicebox GPU legs for live turns.
 
 ## Measured TTS latency (2026-08-23, RTX 4060 Ti, GPU, warm models)
 
