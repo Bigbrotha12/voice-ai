@@ -1,10 +1,10 @@
 # AGENTS.md — Voice Agent Stack
 
-Conventions and hard-won context for agent sessions working in this repo.
+Conventions and context for agent sessions working in this repo.
 
 ## What this is
 
-Learning project: open-source voice I/O for AI agents, built on an unmodified
+open-source voice I/O for AI agents, built on an unmodified
 upstream [Voicebox](https://github.com/jamiepine/voicebox) install. We never fork
 or patch upstream; everything we own lives in this repo.
 
@@ -16,10 +16,10 @@ or patch upstream; everything we own lives in this repo.
 | LiveKit media plane | `docker/livekit.yml` (pinned v1.13.5) | Sibling container, dev mode, loopback-only; bot joins rooms over WebRTC |
 | Pipecat agent | `telephony/pipecat-bot/` | Bundled container (`--host-bot` opts out); faster-whisper STT in-process, llama.cpp LLM via queues proxy; tool calling + MCP bridge (`VOICEBOT_MCP_URLS`) |
 | Wrapper MCP | `services/voice-mcp/` | FastMCP server exposing `say`, `voices`, `listen`; stdio for agents, `VOICE_MCP_TRANSPORT=http` for the bot |
-| Clients | opencode / Claude Code configs; test-client.html; Flutter app at `~/Projects/mobile/ai-assistant` (PLAN.md there) | Registered per docs/setup.md |
+| Clients | coding harness; web; | Registered per docs/setup.md |
 | Telephony (future) | `telephony/` | LiveKit SIP + Telnyx trunk; turn-taking plan in `telephony/RESEARCH.md` |
 
-## Facts that will bite you
+## Facts
 
 - **Ports.** The podman runtime maps host `17600 -> 17493`; that is the live
   path and the default in configs/scripts. Native `17493` only applies when
