@@ -61,3 +61,30 @@ class TestBuildStt:
 
         with pytest.raises(ValueError, match="VOICEBOT_STT_PROVIDER"):
             agent.build_stt()
+
+
+class TestMcpHostGuard:
+    def test_resolvable_localhost(self):
+        assert agent._resolvable("http://localhost:17601/mcp") is True
+        assert agent._resolvable("http://127.0.0.1:17601/mcp") is True
+
+    def test_unresolvable_host(self):
+        # .invalid is guaranteed NXDOMAIN (RFC 2606).
+        assert agent._resolvable("http://no-such-host.invalid:17601/mcp") is False
+
+    def test_missing_host(self):
+        assert agent._resolvable("not-a-url") is False
+
+    @pytest.mark.asyncio
+    async def test_setup_tools_skips_unresolvable_without_network(self, monkeypatch):
+        class FakeLLM:
+            def register_function(self, *args, **kwargs):
+                pass
+
+        monkeypatch.setattr(agent, "MCP_URLS", ["http://no-such-host.invalid:17601/mcp"])
+        monkeypatch.setattr(agent, "MCP_AUTH_TOKEN", "")
+
+        schemas, clients = await agent.setup_tools(FakeLLM())
+
+        assert clients == []
+        assert len(schemas) == 1  # the native get_current_time schema only

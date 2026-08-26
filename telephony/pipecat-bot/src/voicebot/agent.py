@@ -35,7 +35,9 @@ from __future__ import annotations
 import asyncio
 import ctypes
 import os
+import socket
 from pathlib import Path
+from urllib.parse import urlparse
 
 from livekit import api
 from loguru import logger
@@ -268,6 +270,24 @@ async def _register_native_handlers(llm: OLLamaLLMService) -> None:
     llm.register_function("get_current_time", get_current_time)
 
 
+def _resolvable(url: str) -> bool:
+    """True if the URL's hostname resolves from this process.
+
+    The repo .env carries container-oriented MCP URLs (host.containers.
+    internal) that cannot resolve on host-side runs; letting them reach the
+    MCP client produces an anyio TaskGroup teardown cascade that can kill
+    startup. Skip them with a warning instead.
+    """
+    try:
+        host = urlparse(url).hostname
+        if not host:
+            return False
+        socket.getaddrinfo(host, None)
+        return True
+    except OSError:
+        return False
+
+
 async def setup_tools(llm: OLLamaLLMService) -> tuple[list[FunctionSchema], list[MCPClient]]:
     """Register native handlers + MCP servers; return schemas for LLMContext.
 
@@ -280,6 +300,9 @@ async def setup_tools(llm: OLLamaLLMService) -> tuple[list[FunctionSchema], list
 
     clients: list[MCPClient] = []
     for url in MCP_URLS:
+        if not _resolvable(url):
+            logger.warning(f"tools: MCP host unresolvable from here, skipping {url}")
+            continue
         from mcp.client.session_group import StreamableHttpParameters
 
         params = StreamableHttpParameters(url=url)
